@@ -152,7 +152,6 @@ A `row-gutter: 1em` is added automatically between rows so child captions don't 
 
 ### Labels and cross-references
 
-```typst
 ```python
 %| caption: My figure
 %| label: fig-example
@@ -161,7 +160,7 @@ plt.show()
 ```
 
 See @fig-example for details.
-```
+
 
 For grid mode the outer figure gets `<fig-example>` and each child gets `<fig-example-1>`, `<fig-example-2>`, etc.
 
