@@ -252,7 +252,10 @@ def _figure_markup(
 def _extract_figure_title(fig) -> str:
     """Return the suptitle of *fig*, or empty string if none."""
     if fig._suptitle is not None and fig._suptitle.get_text():
-        return fig._suptitle.get_text()
+        title = fig._suptitle.get_text()
+        if '\\' in title:
+            title = title.replace('\\', '').replace('{', '(').replace('}', ')')
+        return title
     return ""
 
 
@@ -398,6 +401,9 @@ def execute_block(
                     # from the plot so it doesn't appear twice (title on image
                     # AND caption underneath).
                     ax_title = ax.get_title()
+                    if '\\' in ax_title:
+                        ax_title = ax_title.replace('\\', '').replace('{', '(').replace('}', ')')
+                        ax.set_title(ax_title)
                     if not opts["keep_title"]:
                         ax.set_title("")
                     _save_single_axes(fig, ax, abs_image_dir / fname)
@@ -408,6 +414,9 @@ def execute_block(
                 # block-level caption source (suptitle takes priority if set).
                 if len(axes) == 1:
                     ax_title = axes[0].get_title()
+                    if '\\' in ax_title:
+                        ax_title = ax_title.replace('\\', '').replace('{', '(').replace('}', ')')
+                        axes[0].set_title(ax_title)
                     if ax_title and caption_from_title is None:
                         caption_from_title = ax_title
                 fname = f"block_{block_index:03d}_fig_{pos:02d}.png"
@@ -444,8 +453,6 @@ def execute_block(
             # Default row-gutter of 1em prevents child captions from overlapping
             # the next row; the user can override with %| grid-row-gutter: …
             extra_grid_args_parts = []
-            if "row-gutter" not in _grid_extra:
-                extra_grid_args_parts.append("row-gutter: 1em")
             extra_grid_args_parts += [
                 f"{k}: {v}" for k, v in _grid_extra.items() if k != "columns"
             ]

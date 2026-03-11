@@ -1,198 +1,136 @@
-# typst-pyexec
+# typst-py
 
-A single-file Python preprocessor that executes fenced `python` blocks embedded in [Typst](https://typst.app) documents and replaces them with rendered output — source code listing, printed text, and matplotlib figures.
+A single-file Python preprocessor that executes fenced `python` blocks in [Typst](https://typst.app) documents and replaces them with rendered output.
 
 ## Requirements
 
 | Tool | Purpose |
 |---|---|
-| [uv](https://docs.astral.sh/uv/) | Run the script with dependencies |
-| [typst](https://github.com/typst/typst) | Compile mode (`-c`) |
-| [tinymist](https://github.com/Myriad-Dreamin/tinymist) | Preview mode (`-p`) |
-| matplotlib | Optional — only needed for figure output |
+| [uv](https://docs.astral.sh/uv/) | Run the script |
+| [typst](https://github.com/typst/typst) | Compile mode (`-c`) and watch mode (`-w`) |
+| matplotlib (optional) | Figure capture from Python blocks |
+
+`typst_py.py` itself uses the Python standard library only. If matplotlib is unavailable, code execution still works but figure capture is disabled.
 
 ## Quickstart
 
 ```powershell
-# Compile to PDF
-uv run --with matplotlib typst_pyexec.py -c report.typ
+# Compile once
+uv run --with matplotlib typst_py.py -c report.typ
 
-# Live browser preview (Python blocks re-execute on save)
-uv run --with matplotlib typst_pyexec.py -p report.typ
+# Watch mode (preprocess on save + typst watch)
+uv run --with matplotlib typst_py.py -w report.typ
 ```
 
-Add any extra packages your code needs with additional `--with` flags:
+Add extra Python packages your code blocks need with additional `--with` flags:
 
 ```powershell
-uv run --with numpy --with pandas --with matplotlib typst_pyexec.py -c report.typ
+uv run --with numpy --with pandas --with matplotlib typst_py.py -c report.typ
 ```
 
-## How it works
+## How It Works
 
-1. The script reads your `.typ` source file and finds every ` ```python … ``` ` fenced block.
-2. All blocks are executed in a single shared Python namespace (imports and variables from earlier blocks are available in later ones).
-3. Each block is replaced in the output with:
-   - **Source listing** — shown as a styled Typst code block (unless `%| echo: false`)
-   - **Printed output** — shown as a raw text block (when `execute: true`)
-   - **Matplotlib figures** — saved as PNG and inserted as `#figure(image(…))`
+1. Read the `.typ` file and find each ` ```python ... ``` ` fenced block.
+2. Execute all blocks in one shared namespace.
+3. Replace each block with:
+   - source listing (unless `%| echo: false`)
+   - printed output (when `execute: true`)
+   - figures (when matplotlib is installed)
 
-The intermediate `.typ` file and images are written to `.typst_pyexec/` next to your source file.
+Generated artifacts are written under `.typst_py/` next to the source file.
 
-### Caching
+## Caching And Re-Execution
 
-Block outputs are cached by a SHA-256 hash of their code and options. On re-run, only the first changed block and all subsequent blocks are re-executed. Blocks before the first change are replayed silently to restore the shared namespace.
+Each block is hashed from `(options + code)` with SHA-256.
 
-### Preview mode
+- If all signatures match cache: no Python re-execution.
+- Otherwise: only blocks from the first changed block onward are re-run.
+- Earlier unchanged blocks are replayed silently to rebuild namespace state.
 
-`-p` launches `tinymist preview` for live browser preview. The source directory is polled every second (configurable with `--interval`). Python blocks re-execute only when you save — not on every keystroke.
+## Block Options
 
----
+Place `%|` option lines at the top of a Python block.
 
-## Writing blocks
-
-Place `%|` option lines at the very top of the block, before any code:
-
-````typst
-```python
-%| caption: Portfolio performance
-%| columns: 2
-import matplotlib.pyplot as plt
-import numpy as np
-
-x = np.linspace(0, 10, 100)
-plt.figure()
-plt.plot(x, np.sin(x))
-plt.show()
-```
-````
-
----
-
-## Block options reference
-
-### Execution control
+### Execution
 
 | Option | Values | Default |
 |---|---|---|
 | `execute` | `true` / `false` | `true` |
 | `echo` | `true` / `false` | `true` |
 
-### Image shorthands — [`image()`](https://typst.app/docs/reference/visualize/image/)
+### Figure Behavior
 
-| Option | Example | Default |
-|---|---|---|
-| `width` | `80%`, `300pt`, `auto` | `auto` |
-| `height` | `200pt`, `50%`, `auto` | `auto` |
-| `fit` | `cover`, `contain`, `stretch` | `cover` |
-| `format` | `png`, `jpg`, `gif`, `svg` | auto-detect |
-| `alt` | `My chart` | none |
-
-### Figure shorthands — [`figure()`](https://typst.app/docs/reference/model/figure/)
-
-| Option | Example | Default | Notes |
+| Option | Values | Default | Notes |
 |---|---|---|---|
-| `caption` | `Portfolio value` | auto from `plt.title()` / `plt.suptitle()` | Explicit caption overrides auto-detection |
-| `keep-title` | `true` | `false` | Keep matplotlib titles on plots; disable auto-caption |
-| `label` | `fig-perf` | none | Attach `<fig-perf>` to the figure; cite with `@fig-perf` |
+| `caption` | text | none | Explicit block caption |
+| `label` | typst label name | none | Outer figure label `<name>` |
+| `keep-title` | `true` / `false` | `false` | Keep matplotlib titles on images |
+| `keep-subplots` | `true` / `false` | `false` | Keep multi-axes figures as one image |
 
-### Grid shorthands — [`grid()`](https://typst.app/docs/reference/layout/grid/)
+### Typst Parameter Passthrough
 
-| Option | Example | Default | Notes |
-|---|---|---|---|
-| `grid` | `false` | `true` | Disable grid; emit one `#figure` per image |
-| `columns` | `2`, `(1fr, 2fr)` | detected from subplot layout, else image count | Any Typst value |
-| `keep-subplots` | `true` | `false` | Keep `plt.subplots()` as one whole image instead of splitting axes |
-
-### Full parameter passthrough
-
-Any Typst parameter can be forwarded using an `img-`, `fig-`, or `grid-` prefix. The value is passed through as a raw Typst expression. Prefix keys override the equivalent shorthand.
+All Typst arguments are passed via prefixes only:
 
 | Prefix | Target call | Example |
 |---|---|---|
-| `img-xxx` | `image(xxx: …)` | `%\| img-width: 80%` |
-| `fig-xxx` | `figure(xxx: …)` | `%\| fig-placement: top` |
-| `grid-xxx` | `grid(xxx: …)` | `%\| grid-row-gutter: 2em` |
+| `img-xxx` | `image(xxx: ...)` | `%| img-width: 80%` |
+| `fig-xxx` | `figure(xxx: ...)` | `%| fig-placement: top` |
+| `grid-xxx` | `grid(xxx: ...)` | `%| grid-gutter: 1em` |
 
----
+No default `image/figure/grid` options are injected unless required by behavior below.
 
-## Matplotlib figure behaviour
+## Figure And Grid Behavior
 
-### Single figure
+- Each axes is saved as a separate image by default.
+- `%| keep-subplots: true` keeps the full matplotlib figure as one image.
+- Multiple images from one block are always emitted as a Typst `grid(...)`.
+- Subfigures default to `kind: "subfigure"`, `supplement: none`, `numbering: "(a)"`.
+- Child labels use letter suffixes from block label:
+  - `%| label: fig-1` -> outer `<fig-1>`, children `<fig-1a>`, `<fig-1b>`, ...
 
-`plt.title("My title")` is automatically captured as the Typst caption and cleared from the image (unless `keep-title: true`).
+### Title Conversion
 
-```python
-plt.figure()
-plt.title("Quarterly revenue")
-plt.plot(...)
-plt.show()
-```
+Matplotlib titles are converted for Typst captions by removing backslashes and replacing `{}` with `()`.
 
-Produces: `#figure(image("…"), caption: [Quarterly revenue])`
+## Watch Mode
 
-### Multiple subplots — `plt.subplots()`
+`-w` does:
 
-By default each axes is saved as a separate PNG. The axes title becomes the caption of its individual `figure()`. Without a block-level suptitle/caption, a bare `#grid(…)` is emitted so each sub-figure gets its own Typst number. With a suptitle or `%| caption:`, the grid is wrapped in a single outer `#figure(grid(…), caption: […])`.
+1. preprocess once,
+2. start `typst watch` on the generated `.typ` file,
+3. poll source tree mtimes,
+4. re-preprocess only when files are saved.
 
-```python
-%| caption: Seasonal comparison
-fig, axes = plt.subplots(1, 3)
-axes[0].set_title("Spring"); ...
-axes[1].set_title("Summer"); ...
-axes[2].set_title("Autumn"); ...
-plt.suptitle("Seasonal comparison")
-plt.show()
-```
+## CLI
 
-Set `%| keep-subplots: true` to save the whole figure as one image instead.
-
-### Default grid spacing
-
-A `row-gutter: 1em` is added automatically between rows so child captions don't overlap. Override with `%| grid-row-gutter: 2em`.
-
-### Labels and cross-references
-
-```python
-%| caption: My figure
-%| label: fig-example
-plt.plot(...)
-plt.show()
-```
-
-See @fig-example for details.
-
-
-For grid mode the outer figure gets `<fig-example>` and each child gets `<fig-example-1>`, `<fig-example-2>`, etc.
-
----
-
-## CLI reference
-
-```
-usage: typst_pyexec.py [-c | -p] [options] input.typ
+```text
+usage: typst_py.py [-c | -w] [options] input.typ
 
   -c, --compile        Compile to PDF once
-  -p, --preview        Live browser preview via tinymist
+  -w, --watch          Preprocess on save + typst watch
 
-  -d, --debug          Keep the intermediate .typ file after compilation
-  --images-dir PATH    Image output directory inside .typst_pyexec/ (default: img)
-  --interval SEC       Source polling interval for preview mode (default: 1.0)
-  --host HOST          Host for tinymist preview
-  --port PORT          Port for tinymist preview
+  -d, --debug          Keep intermediate .typ file
+  --images-dir PATH    Image directory inside .typst_py/ (default: img)
+  --interval SEC       Polling interval in seconds (default: 1.0)
 ```
 
-## File layout
+## File Layout
 
-```
+```text
 project/
-├── report.typ                    your source file
-├── typst_pyexec.py
-└── .typst_pyexec/
-    ├── report.generated.typ      intermediate file passed to typst/tinymist
-    ├── block-cache.json          block signature cache
-    └── img/
-        ├── block_001_fig_01.png
-        └── ...
+|- report.typ
+|- typst_py.py
+`- .typst_py/
+   |- report.generated.typ
+   |- block-cache.json
+   `- img/
+      |- b1_f1.png
+      `- ...
 ```
 
-Add `.typst_pyexec/` to your `.gitignore`.
+Add `.typst_py/` to `.gitignore`.
+
+## License
+
+This project is licensed under the MIT License.
+See `LICENSE` for the full text.
