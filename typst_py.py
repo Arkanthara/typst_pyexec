@@ -21,11 +21,28 @@ Per-block options  (place at the very top of the block)
   %| fig-xxx: <value>      forwarded as  xxx: <value>  inside figure()
   %| grid-xxx: <value>     forwarded as  xxx: <value>  inside grid()
 
-Subfigures use (a), (b), … notation by default. Labels are <label>a, <label>b.
-To customize subfigure appearance, use a Typst show rule on the generated
-`subfigure` function:
-  #let subfigure = figure.with(kind: "subfigure", supplement: none, numbering: "(a)")
-Override numbering, supplement, etc. via %| fig-xxx passthrough.
+Subfigures are emitted as figure(kind: "subfigure"). Labels are <label>a, <label>b.
+Caption formatting – bold "(a) caption" and counter reset per outer figure –
+requires these show rules in your Typst template:
+
+  #show figure.where(kind: "subfigure"): set figure(supplement: "Figure")
+
+  #show figure.where(kind: image): outer => {
+    counter(figure.where(kind: "subfigure")).update(0)
+    set figure(numbering: (..nums) => {
+      let outer-nums = counter(figure.where(kind: image)).at(outer.location())
+      std.numbering("1a", ..outer-nums, ..nums)
+    })
+    show figure.where(kind: "subfigure"): inner => {
+      show figure.caption: it => context {
+        strong(std.numbering("(a)", it.counter.at(inner.location()).last()))
+        [ ]
+        it.body
+      }
+      inner
+    }
+    outer
+  }
 
 CLI
 ---
@@ -130,7 +147,7 @@ def _figure(body: str, extra: dict, *, caption: str | None = None,
 def _subfigure(body: str, extra: dict, *, caption: str | None = None,
                label: str | None = None) -> str:
     """Build a subfigure (figure with kind: "subfigure") for grid children."""
-    named = {"kind": '"subfigure"', "supplement": "none", "numbering": '"(a)"'}
+    named = {"kind": '"subfigure"'}
     named.update(extra)
     if caption is not None and "caption" not in named:
         named["caption"] = f"[{caption}]"
@@ -215,8 +232,13 @@ _ALPHA = "abcdefghijklmnopqrstuvwxyz"
 
 
 def execute_block(code: str, *, ns: dict, idx: int,
-                  abs_dir: Path, rel_dir: Path, opts: dict) -> str:
-    """Execute code, capture output and figures, return Typst markup."""
+                  abs_dir: Path, rel_dir: Path, opts: dict) -> tuple[str, dict]:
+    """Execute code, capture output and figures. Returns (Typst markup, exec_data).
+
+    exec_data stores raw results to allow re-rendering without re-running Python:
+    {"text", "images": [{"path", "caption"}], "ncols", "block_caption"}.
+    """
+    _empty: dict = {"text": "", "images": [], "ncols": None, "block_caption": None}
     buf_out, buf_err = io.StringIO(), io.StringIO()
     open_figs = set(plt.get_fignums()) if plt else set()
     if plt:
@@ -226,7 +248,8 @@ def execute_block(code: str, *, ns: dict, idx: int,
         with redirect_stdout(buf_out), redirect_stderr(buf_err):
             exec(compile(code, f"<block {idx}>", "exec"), ns)
     except Exception:
-        return _raw(traceback.format_exc().strip(), lang="text")
+        tb = traceback.format_exc().strip()
+        return _raw(tb, lang="text"), {**_empty, "text": tb}
 
     parts = []
 
@@ -239,14 +262,14 @@ def execute_block(code: str, *, ns: dict, idx: int,
 
     # Matplotlib figures
     if not plt:
-        return "".join(parts)
+        return "".join(parts), {**_empty, "text": text}
 
     new_figs = sorted(set(plt.get_fignums()) - open_figs)
     if not new_figs:
-        return "".join(parts)
+        return "".join(parts), {**_empty, "text": text}
 
-    # Collect all images: list of (image_call, per_image_caption)
-    images: list[tuple[str, str | None]] = []
+    # Collect images: list of (rel_path_posix, per_image_caption)
+    raw_images: list[tuple[str, str | None]] = []
     block_caption: str | None = None
     detected_cols: int | None = None
     abs_dir.mkdir(parents=True, exist_ok=True)
@@ -272,8 +295,7 @@ def execute_block(code: str, *, ns: dict, idx: int,
                     ax.set_title("")
                 fname = f"b{idx}_f{pos}_a{ai}.png"
                 _save_axes(fig, ax, abs_dir / fname)
-                images.append((_image((rel_dir / fname).as_posix(), opts["_img"]),
-                               ax_title or None))
+                raw_images.append(((rel_dir / fname).as_posix(), ax_title or None))
         else:
             if len(axes) == 1:
                 ax_title = _clean_title(axes[0].get_title())
@@ -286,65 +308,101 @@ def execute_block(code: str, *, ns: dict, idx: int,
                     ax.set_title("")
             fname = f"b{idx}_f{pos}.png"
             fig.savefig(abs_dir / fname, bbox_inches="tight")
-            images.append((_image((rel_dir / fname).as_posix(), opts["_img"]),
-                           suptitle or None))
+            raw_images.append(((rel_dir / fname).as_posix(), suptitle or None))
         plt.close(fig)
 
-    if not images:
-        return "".join(parts)
+    edata: dict = {
+        "text": text,
+        "images": [{"path": p, "caption": c} for p, c in raw_images],
+        "ncols": detected_cols,
+        "block_caption": block_caption,
+    }
 
-    # Resolve caption: explicit > suptitle > none
+    if not raw_images:
+        return "".join(parts), edata
+
+    parts += _build_figure_markup(raw_images, detected_cols, block_caption, opts)
+    return "".join(parts), edata
+
+
+def _build_figure_markup(images: list[tuple[str, str | None]],
+                         detected_cols: int | None,
+                         block_caption: str | None,
+                         opts: dict) -> list[str]:
+    """Build Typst figure/grid markup from raw image paths + current display opts."""
     cap = opts["caption"]
     if cap is None and not opts["keep_title"] and block_caption:
         cap = block_caption
     label = opts["label"]
 
     if len(images) == 1:
-        # Single image → single figure
-        parts.append(_figure(images[0][0], opts["_fig"], caption=cap, label=label))
-    else:
-        # Multiple images → grid of subfigures inside an outer figure
-        ncols = detected_cols or len(images)
-        # Override from grid-columns if specified
-        grid_extra = dict(opts["_grid"])
-        if "columns" in grid_extra:
-            ncols_override = grid_extra.pop("columns")
-            ncols = int(ncols_override) if ncols_override.isdigit() else ncols
+        return [_figure(_image(images[0][0], opts["_img"]), opts["_fig"],
+                        caption=cap, label=label)]
 
-        children = []
-        for i, (img, per_cap) in enumerate(images):
-            letter = _ALPHA[i] if i < 26 else str(i + 1)
-            sub_label = f"{label}{letter}" if label else None
-            children.append(_subfigure(img, opts["_fig"],
-                                       caption=per_cap, label=sub_label))
-        grid_body = _grid(children, grid_extra, ncols)
-        parts.append(_figure(grid_body, {}, caption=cap, label=label))
+    # Multiple images → grid of subfigures inside an outer figure
+    ncols = detected_cols or len(images)
+    grid_extra = dict(opts["_grid"])
+    if "columns" in grid_extra:
+        ncols_override = grid_extra.pop("columns")
+        ncols = int(ncols_override) if ncols_override.isdigit() else ncols
 
+    children = []
+    for i, (path, per_cap) in enumerate(images):
+        letter = _ALPHA[i] if i < 26 else str(i + 1)
+        sub_label = f"{label}{letter}" if label else None
+        children.append(_subfigure(_image(path, opts["_img"]), opts["_fig"],
+                                   caption=per_cap, label=sub_label))
+    grid_body = _grid(children, grid_extra, ncols)
+    return [_figure(grid_body, {"kind": "image"}, caption=cap, label=label)]
+
+
+def _render_from_exec_data(edata: dict, opts: dict) -> str:
+    """Reconstruct execute_block markup from cached exec_data + new display opts."""
+    parts = []
+    text = edata.get("text", "")
+    if text.strip():
+        parts.append(_raw(text.strip(), lang="text"))
+    raw_images = [(d["path"], d.get("caption")) for d in edata.get("images", [])]
+    if raw_images:
+        parts += _build_figure_markup(
+            raw_images, edata.get("ncols"), edata.get("block_caption"), opts)
     return "".join(parts)
 
 
 # ── Caching ───────────────────────────────────────────────────────────────────
 
-def _sig(opts: dict, code: str) -> str:
-    """SHA-256 hash of block options + code."""
-    payload = json.dumps({**opts, "code": code}, sort_keys=True, ensure_ascii=True)
+def _sig(code: str) -> str:
+    """SHA-256 of the Python code only (ignores all %| options)."""
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def _opts_sig(opts: dict) -> str:
+    """SHA-256 of all %| options."""
+    payload = json.dumps(opts, sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _load_cache(path: Path) -> tuple[list[str], list[str]]:
+def _load_cache(path: Path) -> tuple[list[str], list[str], list[str], list[dict]]:
     if path.exists():
         try:
             d = json.loads(path.read_text(encoding="utf-8"))
-            s, r = d.get("sigs", []), d.get("rendered", [])
-            if isinstance(s, list) and isinstance(r, list):
-                return s, r
+            s  = d.get("sigs", [])
+            os = d.get("opts_sigs", [])
+            r  = d.get("rendered", [])
+            e  = d.get("exec_data", [])
+            if all(isinstance(x, list) for x in (s, os, r, e)):
+                return s, os, r, e
         except Exception:
             pass
-    return [], []
+    return [], [], [], []
 
 
-def _save_cache(path: Path, sigs: list[str], rendered: list[str]) -> None:
-    path.write_text(json.dumps({"sigs": sigs, "rendered": rendered}), encoding="utf-8")
+def _save_cache(path: Path, sigs: list[str], opts_sigs: list[str],
+                rendered: list[str], exec_data: list[dict]) -> None:
+    path.write_text(json.dumps({
+        "sigs": sigs, "opts_sigs": opts_sigs,
+        "rendered": rendered, "exec_data": exec_data,
+    }), encoding="utf-8")
 
 
 # ── Preprocessing ─────────────────────────────────────────────────────────────
@@ -374,52 +432,96 @@ def preprocess(source: Path, output: Path, img_dir: Path, cache_path: Path) -> N
         blocks.append({"idx": bidx, "opts": opts, "code": code})
         segments.append(("block", len(blocks) - 1))
 
-    # Compute signatures and find first dirty block
-    sigs = [_sig(b["opts"], b["code"]) for b in blocks]
-    cached_sigs, cached_rendered = _load_cache(cache_path)
+    # Compute signatures
+    sigs      = [_sig(b["code"]) for b in blocks]
+    opts_sigs = [_opts_sig(b["opts"]) for b in blocks]
+    cached_sigs, cached_opts_sigs, cached_rendered, cached_exec_data = _load_cache(cache_path)
 
-    if cached_sigs == sigs and len(cached_rendered) == len(blocks):
-        rendered = cached_rendered
+    n = len(blocks)
+    rendered: list[str] = []
+    exec_data_list: list[dict] = []
+
+    # ── Case 1: nothing changed ───────────────────────────────────────────────
+    if (cached_sigs == sigs and cached_opts_sigs == opts_sigs
+            and len(cached_rendered) == n):
         print("[typst-py] All blocks cached.")
+        rendered = cached_rendered
+        exec_data_list = cached_exec_data
+
+    # ── Case 2: only opts changed — re-render without re-running Python ───────
+    elif (cached_sigs == sigs
+          and len(cached_rendered) == n and len(cached_exec_data) == n):
+        print("[typst-py] Options changed, re-rendering…")
+        exec_data_list = cached_exec_data
+        for j, b in enumerate(blocks):
+            if opts_sigs[j] == cached_opts_sigs[j]:
+                rendered.append(cached_rendered[j])
+            else:
+                r = ""
+                if b["opts"]["echo"]:
+                    r += _raw(b["code"].rstrip("\n"), lang="python")
+                if b["opts"]["execute"]:
+                    r += _render_from_exec_data(cached_exec_data[j], b["opts"])
+                rendered.append(r)
+
+    # ── Case 3: code changed — find first dirty block and re-execute ──────────
     else:
-        dirty = 0
-        if len(cached_sigs) == len(blocks) and len(cached_rendered) == len(blocks):
+        first_dirty = 0
+        if len(cached_sigs) == n and len(cached_rendered) == n and len(cached_exec_data) == n:
             for j, (s, cs) in enumerate(zip(sigs, cached_sigs)):
                 if s != cs:
-                    dirty = j
+                    first_dirty = j
                     break
 
-        n = len(blocks)
-        if dirty > 0:
-            print(f"[typst-py] {dirty} cached, re-running {dirty+1}–{n}…")
+        if first_dirty > 0:
+            print(f"[typst-py] {first_dirty} cached, re-running {first_dirty+1}–{n}…")
         else:
             print(f"[typst-py] Running all {n} block(s)…")
 
-        # Replay unchanged blocks to restore namespace
         ns: dict = {"__name__": "__main__"}
         abs_dir = output.parent / img_dir
         if plt:
             plt.show = lambda *a, **kw: None
-        for b in blocks[:dirty]:
+
+        # Replay pre-dirty blocks to restore shared namespace
+        for b in blocks[:first_dirty]:
             if b["opts"]["execute"] and b["code"].strip():
                 try:
                     exec(compile(b["code"], f"<block {b['idx']}>", "exec"), ns)
                 except Exception:
                     pass
 
+        # Pre-dirty blocks: reuse cached results, re-render if their opts changed
+        for j in range(first_dirty):
+            b = blocks[j]
+            exec_data_list.append(cached_exec_data[j])
+            cached_os = cached_opts_sigs[j] if j < len(cached_opts_sigs) else None
+            if opts_sigs[j] == cached_os:
+                rendered.append(cached_rendered[j])
+            else:
+                r = ""
+                if b["opts"]["echo"]:
+                    r += _raw(b["code"].rstrip("\n"), lang="python")
+                if b["opts"]["execute"]:
+                    r += _render_from_exec_data(cached_exec_data[j], b["opts"])
+                rendered.append(r)
+
         # Execute dirty blocks
-        fresh = []
-        for b in blocks[dirty:]:
+        for b in blocks[first_dirty:]:
             r = ""
             if b["opts"]["echo"]:
                 r += _raw(b["code"].rstrip("\n"), lang="python")
             if b["opts"]["execute"] and b["code"].strip():
-                r += execute_block(b["code"], ns=ns, idx=b["idx"],
-                                   abs_dir=abs_dir, rel_dir=img_dir, opts=b["opts"])
-            fresh.append(r)
+                markup, edata = execute_block(b["code"], ns=ns, idx=b["idx"],
+                                              abs_dir=abs_dir, rel_dir=img_dir,
+                                              opts=b["opts"])
+                r += markup
+            else:
+                edata = {"text": "", "images": [], "ncols": None, "block_caption": None}
+            rendered.append(r)
+            exec_data_list.append(edata)
 
-        rendered = list(cached_rendered[:dirty]) + fresh
-        _save_cache(cache_path, sigs, rendered)
+    _save_cache(cache_path, sigs, opts_sigs, rendered, exec_data_list)
 
     # Assemble output
     out = []
@@ -432,21 +534,20 @@ def preprocess(source: Path, output: Path, img_dir: Path, cache_path: Path) -> N
 
 def watch(source: Path, generated: Path, img_dir: Path, cache_path: Path,
           interval: float) -> None:
-    """Preprocess on save, launch `typst watch` for live compilation."""
+    """Preprocess on save, launch `tinymist preview` for live preview."""
     print("[typst-py] Initial preprocessing…")
     preprocess(source, generated, img_dir, cache_path)
 
-    # Launch typst watch on the generated file
-    cmd = ["typst", "watch", str(generated), "--root", str(source.parent)]
+    # Launch tinymist preview on the generated file (serves HTML with live reload)
+    cmd = ["tinymist", "preview", str(generated), "--root", str(source.parent)]
     proc = subprocess.Popen(cmd)
     time.sleep(1)
     if proc.poll() is not None:
-        raise RuntimeError("`typst watch` failed to start.")
+        raise RuntimeError("`tinymist preview` failed to start.")
 
-    # Track file changes in source directory
+    # Track file changes in source directory, ignoring all generated artifacts
     watch_root = source.parent.resolve()
-    ignore = {generated.resolve()}
-    ignore_dirs = {(generated.parent / img_dir).resolve()}
+    ignore_dirs = {generated.parent.resolve()}
 
     def snap() -> dict[Path, float]:
         m: dict[Path, float] = {}
@@ -454,7 +555,7 @@ def watch(source: Path, generated: Path, img_dir: Path, cache_path: Path,
             if not p.is_file():
                 continue
             rp = p.resolve()
-            if rp in ignore or any(rp.is_relative_to(d) for d in ignore_dirs):
+            if any(rp.is_relative_to(d) for d in ignore_dirs):
                 continue
             try:
                 m[rp] = p.stat().st_mtime
@@ -469,7 +570,7 @@ def watch(source: Path, generated: Path, img_dir: Path, cache_path: Path,
         while True:
             time.sleep(interval)
             if proc.poll() is not None:
-                raise RuntimeError("`typst watch` exited unexpectedly.")
+                raise RuntimeError("`tinymist preview` exited unexpectedly.")
             current = snap()
             if current != last:
                 print("[typst-py] Change detected – re-preprocessing…")
