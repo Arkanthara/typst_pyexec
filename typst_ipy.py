@@ -20,6 +20,7 @@ Per-block options  (place at the very top of the block)
   %| execute: false        skip execution
   %| echo: false           hide source listing
   %| refresh: true         force re-execution of this block every run
+  %| execute-all: true     force re-execution of all cells from #1 to this cell
 
   %| caption: My figure    block-level caption (overrides auto-detection)
   %| label: fig-name       Typst label for @fig-name cross-references
@@ -83,7 +84,7 @@ from jupyter_client.manager import KernelManager
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BOOL_OPTIONS = {
-    "execute", "echo", "keep_subplots", "refresh",
+    "execute", "echo", "keep_subplots", "refresh", "execute_all",
 }
 
 
@@ -94,6 +95,7 @@ class BlockOptions:
     execute: bool = True
     echo: bool = True
     refresh: bool = False
+    execute_all: bool = False
 
     keep_subplots: bool = False
     caption: str | None = None
@@ -109,6 +111,7 @@ class BlockOptions:
             "execute": self.execute,
             "echo": self.echo,
             "refresh": self.refresh,
+            "execute_all": self.execute_all,
             "keep_subplots": self.keep_subplots,
             "caption": self.caption,
             "label": self.label,
@@ -123,6 +126,7 @@ class BlockOptions:
             execute=d.get("execute", True),
             echo=d.get("echo", True),
             refresh=d.get("refresh", False),
+            execute_all=d.get("execute_all", False),
             keep_subplots=d.get("keep_subplots", False),
             caption=d.get("caption"),
             label=d.get("label"),
@@ -136,6 +140,7 @@ class BlockOptions:
         return {
             "execute": self.execute,
             "echo": self.echo,
+            "execute_all": self.execute_all,
             "keep_subplots": self.keep_subplots,
             "caption": self.caption,
             "label": self.label,
@@ -440,7 +445,7 @@ def _make_cell_code(code: str, block_id: int, abs_img_dir: str, keep_subplots: b
         f"{indented}\n"
         f"except Exception:\n"
         f"    _typst_error = _tb.format_exc()\n"
-        f'_typst_show_figures({block_id}, "{abs_img_dir}", keep_subplots={ks})\n'
+        f'_typst_show_figures({block_id}, {repr(abs_img_dir)}, keep_subplots={ks})\n'
         f"if _typst_error:\n"
         f'    print("__TYPST_ERROR__" + _typst_error)\n'
     )
@@ -709,15 +714,18 @@ def preprocess(
 
     # ── Classify each block ───────────────────────────────────────────────────
     actions: list[str] = []
-    has_matching_cache = len(cache.entries) == n
 
     for j in range(n):
         b = blocks[j]
-        cached = cache.get(j) if has_matching_cache else None
+        # Use cache if available (even if total count differs due to removed cells)
+        cached = cache.get(j) if j < len(cache.entries) else None
 
         if not b.opts.execute:
             actions.append(_SKIP)
         elif b.opts.refresh:
+            actions.append(_EXECUTE)
+        elif b.opts.execute_all:
+            # execute-all: true forces re-execution of this block
             actions.append(_EXECUTE)
         elif cached and cached.code_hash == code_hashes[j]:
             if cached.opts_hash == opts_hashes[j]:
@@ -726,6 +734,20 @@ def preprocess(
                 actions.append(_RERENDER)
         else:
             actions.append(_EXECUTE)
+
+    # ── execute-all cascade: if a block has execute-all: true, all prior ─────
+    # cells must also re-execute (kernel namespace is sequential)
+    last_execute_all = None
+    for j in range(n):
+        if blocks[j].opts.execute_all and actions[j] == _EXECUTE:
+            last_execute_all = j
+
+    if last_execute_all is not None:
+        for j in range(last_execute_all):
+            if actions[j] in (_CACHED, _RERENDER, _SKIP):
+                # Force re-execute (unless execute: false, then keep as skip)
+                if blocks[j].opts.execute:
+                    actions[j] = _EXECUTE
 
     # ── Cascade: if a block's code changed, all subsequent must re-execute ────
     # (because the kernel namespace is sequential)
