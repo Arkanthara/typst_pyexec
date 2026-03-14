@@ -19,6 +19,7 @@ Per-block options  (place at the very top of the block)
 ------------------------------------------------------
   %| execute: false        skip execution
   %| echo: false           hide source listing
+  %| raw: false            hide raw output (stdout/stderr)
   %| refresh: true         force re-execution of this block every run
   %| execute-all: true     force re-execution of all cells from #1 to this cell
 
@@ -84,7 +85,7 @@ from jupyter_client.manager import KernelManager
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BOOL_OPTIONS = {
-    "execute", "echo", "keep_subplots", "refresh", "execute_all",
+    "execute", "echo", "keep_subplots", "refresh", "execute_all", "raw",
 }
 
 
@@ -96,6 +97,7 @@ class BlockOptions:
     echo: bool = True
     refresh: bool = False
     execute_all: bool = False
+    raw: bool = True
 
     keep_subplots: bool = False
     caption: str | None = None
@@ -112,6 +114,7 @@ class BlockOptions:
             "echo": self.echo,
             "refresh": self.refresh,
             "execute_all": self.execute_all,
+            "raw": self.raw,
             "keep_subplots": self.keep_subplots,
             "caption": self.caption,
             "label": self.label,
@@ -127,6 +130,7 @@ class BlockOptions:
             echo=d.get("echo", True),
             refresh=d.get("refresh", False),
             execute_all=d.get("execute_all", False),
+            raw=d.get("raw", True),
             keep_subplots=d.get("keep_subplots", False),
             caption=d.get("caption"),
             label=d.get("label"),
@@ -140,6 +144,7 @@ class BlockOptions:
         return {
             "execute": self.execute,
             "echo": self.echo,
+            "raw": self.raw,
             "execute_all": self.execute_all,
             "keep_subplots": self.keep_subplots,
             "caption": self.caption,
@@ -878,12 +883,13 @@ def _render_block(
     if not opts.execute:
         return "".join(parts)
 
-    # Text output
-    text = stdout
-    if stderr:
-        text = (text + "\n[stderr]\n" + stderr).strip() if text else stderr
-    if text.strip():
-        parts.append(typst_raw(text.strip(), lang="text"))
+    # Text output (only if raw: true)
+    if opts.raw:
+        text = stdout
+        if stderr:
+            text = (text + "\n[stderr]\n" + stderr).strip() if text else stderr
+        if text.strip():
+            parts.append(typst_raw(text.strip(), lang="text"))
 
     # Figure output
     if figures:
