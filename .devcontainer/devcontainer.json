@@ -1,6 +1,6 @@
 {
   "name": "Typst PyExec",
-  "image": "ghcr.io/Arkanthara/typst_pyexec:latest",
+  "image": "ghcr.io/arkanthara/typst_pyexec:latest",
   "features": {},
   "forwardPorts": [23625],
   "portsAttributes": {
@@ -10,9 +10,10 @@
     }
   },
   "containerEnv": {
-    "UV_LINK_MODE": "copy"
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "PIP_NO_CACHE_DIR": "1"
   },
-  "postCreateCommand": "bash -lc 'if [ -f pyproject.toml ]; then uv sync --dev --all-extras || uv sync --dev || uv sync; fi'",
+  "postCreateCommand": "bash -lc 'python -m pip install --no-cache-dir numpy matplotlib'",
   "customizations": {
     "vscode": {
       "extensions": [

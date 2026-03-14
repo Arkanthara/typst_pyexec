@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm AS binaries
+FROM python:3.12-slim-bookworm AS binaries
 
 ARG TYPST_VERSION=0.12.0
 ARG TINYMIST_VERSION=0.14.10
@@ -16,7 +16,12 @@ RUN set -eux; \
       | tar -xz -C /tmp/tinymist; \
     install -m 0755 "$(find /tmp/tinymist -type f -name tinymist | head -n 1)" /opt/bin/tinymist
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm
+FROM python:3.12-slim-bookworm
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+  PIP_NO_CACHE_DIR=1 \
+  PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONUNBUFFERED=1
 
 WORKDIR /workspace
 
@@ -25,10 +30,10 @@ COPY --from=binaries /opt/bin/tinymist /usr/local/bin/tinymist
 COPY typst_ipy.py /usr/local/bin/typst_ipy.py
 
 RUN chmod +x /usr/local/bin/typst_ipy.py \
-    && uv pip install --system --no-cache ipykernel jupyter-client
+  && python -m pip install --no-cache-dir ipykernel jupyter-client
 
 # Useful for `tinymist preview -p` in devcontainers.
 EXPOSE 23625
 
-ENTRYPOINT ["typst_ipy.py"]
+ENTRYPOINT ["python", "/usr/local/bin/typst_ipy.py"]
 CMD ["--help"]
