@@ -10,10 +10,9 @@
     }
   },
   "containerEnv": {
-    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-    "PIP_NO_CACHE_DIR": "1"
+    "UV_LINK_MODE": "copy"
   },
-  "postCreateCommand": "bash -lc 'python -m pip install --no-cache-dir numpy matplotlib'",
+  "postCreateCommand": "bash -lc 'if [ -f pyproject.toml ]; then uv sync --dev --all-extras || uv sync --dev || uv sync; fi'",
   "customizations": {
     "vscode": {
       "extensions": [
