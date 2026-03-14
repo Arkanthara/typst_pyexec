@@ -30,12 +30,12 @@ RUN chmod +x /usr/local/bin/typst_ipy.py \
     && printf '%s\n' \
       '#!/usr/bin/env bash' \
       'set -euo pipefail' \
-      'exec uv run --active --with ipykernel "$@"' \
-      > /usr/local/bin/uv-active-ipy \
-    && chmod +x /usr/local/bin/uv-active-ipy
+      'exec uv run --active --with ipykernel /usr/local/bin/typst_ipy.py "$@"' \
+      > /usr/local/bin/render \
+    && chmod +x /usr/local/bin/render
 
 # Useful for `tinymist preview -p` in devcontainers.
 EXPOSE 23625
 
-ENTRYPOINT ["uv", "run", "--active", "--with", "ipykernel", "/usr/local/bin/typst_ipy.py"]
+ENTRYPOINT ["render"]
 CMD ["--help"]
