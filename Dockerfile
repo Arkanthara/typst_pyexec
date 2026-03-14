@@ -20,6 +20,8 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm
 
 WORKDIR /workspace
 
+ENV UV_LINK_MODE=copy
+
 COPY --from=binaries /opt/bin/typst /usr/local/bin/typst
 COPY --from=binaries /opt/bin/tinymist /usr/local/bin/tinymist
 COPY typst_ipy.py /usr/local/bin/typst_ipy.py
