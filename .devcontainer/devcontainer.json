@@ -1,0 +1,25 @@
+{
+  "name": "Typst PyExec",
+  "image": "ghcr.io/Arkanthara/typst_pyexec:latest",
+  "features": {},
+  "forwardPorts": [23625],
+  "portsAttributes": {
+    "23625": {
+      "label": "Tinymist Preview",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "containerEnv": {
+    "UV_LINK_MODE": "copy"
+  },
+  "postCreateCommand": "bash -lc 'if [ -f pyproject.toml ]; then uv sync --dev --all-extras || uv sync --dev || uv sync; fi'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "myriad-dreamin.tinymist",
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ]
+    }
+  }
+}
