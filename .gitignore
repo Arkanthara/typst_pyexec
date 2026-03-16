@@ -1,0 +1,9 @@
+*__pycache__
+*.typst_pyexec*
+*.venv
+*.pytest_cache
+*.mypy*
+*.ruff*
+*dist
+*coverage*
+*report
