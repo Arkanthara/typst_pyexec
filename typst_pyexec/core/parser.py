@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from dataclasses import dataclass, field
 
 # Matches fenced blocks:  ```python\n<source>\n```
@@ -105,6 +106,8 @@ def _extract_block_options(source: str) -> tuple[dict[str, str], str]:
         i += 1
 
     cleaned = "\n".join(lines[i:])
+    # Remove shared left padding so paragraph-indented fences execute normally.
+    cleaned = textwrap.dedent(cleaned)
     if source.endswith("\n"):
         cleaned += "\n"
     return opts, cleaned

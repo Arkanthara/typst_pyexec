@@ -90,10 +90,34 @@ class KernelManager:
                 self._kc.start_channels()
                 self._kc.wait_for_ready(timeout=_TIMEOUT)
                 logger.info("Kernel restarted successfully.")
+                self._has_namespace_state = False
                 return
             except Exception as exc:
                 logger.debug("In-place restart failed: %s — starting fresh.", exc)
         self._start_fresh()
+
+    def initialize_runtime(self) -> None:
+        """Run one-time initialization code in the kernel.
+        
+        Sets up matplotlib and imports the figure export module.
+        """
+        self.ensure_running()
+        try:
+            init_code = (
+                "import os\n"
+                "import matplotlib\n"
+                "import matplotlib.pyplot as plt\n"
+                "matplotlib.use('Agg')\n"
+                "from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata\n"
+            )
+            result = self.execute(init_code)
+            if result.get("status") == "error":
+                logger.warning(
+                    "Runtime initialization failed (non-fatal): %s",
+                    result.get("error", ""),
+                )
+        except Exception as exc:
+            logger.warning("Runtime initialization error (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Execution

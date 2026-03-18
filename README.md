@@ -8,6 +8,7 @@ It executes Python fences inside `.typ` files, captures outputs (stdout, figures
 
 - Reactive dependency graph based on Python AST analysis
 - Incremental execution with source-hash cache
+- Reduced duplicate hashing and cache I/O in the execution pipeline
 - Persistent Jupyter kernel between builds
 - Automatic cold-kernel hydration for dependency prerequisites
 - Matplotlib figure export to SVG with PNG fallback
@@ -63,6 +64,8 @@ Place options at the top of a Python fence:
 %| echo: false
 %| raw: true
 %| figure: true
+%| plt-lines.linewidth: 0.8
+%| plt-axes.linewidth: 0.6
 print("hello")
 ```
 ````
@@ -80,12 +83,39 @@ Supported options:
 - `img-*`: passthrough kwargs for Typst `image(...)`
 - `fig-*`: passthrough kwargs for Typst `figure(...)`
 - `grid-*`: passthrough kwargs for Typst `grid(...)`
+- `plt-*`: per-cell matplotlib `rcParams` overrides (key after `plt-` maps to rcParam name)
+
+Default `plt-*` values applied to every executed cell:
+
+- `lines.linewidth: 0.8`
+- `axes.linewidth: 0.6`
+- `grid.linewidth: 0.2`
+- `axes.grid: true`
+- `lines.markersize: 4` (scatter points are ~2x smaller in area than matplotlib default)
+
+`plt-*` examples:
+
+- `%| plt-lines.linewidth: 0.8`
+- `%| plt-axes.linewidth: 0.6`
+- `%| plt-grid.linewidth: 0.4`
+- `%| plt-axes.grid: true`
+
+Precedence order for plot style values:
+
+1. Built-in defaults (values above)
+2. `%| plt-*` metadata options
+3. Any `matplotlib.rcParams[...] = ...` or `plt.rcParams.update(...)` in Python code
+
+This means Python code always wins over `%| plt-*`, and `%| plt-*` wins over defaults.
 
 Behavior notes:
 
 - `cell_id` is internal and generated automatically.
-- Option-only edits do not invalidate cache because cache keys are based on Python source.
+- Python fences can be indented to fit paragraph/layout context: shared left padding is automatically removed before execution.
+- In generated `.typst_pyexec.typ`, that original block padding is preserved for both rendered source and rendered outputs.
+- Option-only edits (including `plt-*`) do not invalidate cache because cache keys are based on Python source.
 - To re-run on option updates, set `refresh: true`.
+- Build logs include `effective plot rcParams` per executed cell for quick verification.
 
 ## Figure and Caption Behavior
 
@@ -112,7 +142,23 @@ typst_pyexec writes runtime state into `.typst_pyexec/`:
 - `kernel_connection.json`: reconnect data for persistent kernel
 - `cache/`: JSON entries keyed by SHA-256 of cell source
 - `figures/`: SVG/PNG artifacts
-- `notebook.ipynb`: synchronized notebook representation
+- `notebook.ipynb`: synchronized notebook in normal execution mode (original user cells)
+- `notebook_export.ipynb`: synchronized notebook in export mode (figure capture preamble/postamble included)
+
+### Notebook Modes
+
+Two notebooks are intentionally generated:
+
+- `notebook.ipynb` preserves the authored Python cells and attached outputs exactly as written (minimal overhead).
+- `notebook_export.ipynb` wraps each cell with figure-export helpers that invoke optimized functions.
+
+This split keeps one notebook readable for normal analysis and reproducibility, while the export notebook is designed for generating Typst-integrated figures and results.
+
+**Standalone Execution**: Both notebooks include a setup cell that initializes the environment:
+- **Normal mode**: Sets working directory for relative path consistency
+- **Export mode**: Sets working directory AND imports matplotlib, pyplot, and the `save_figures_and_metadata` function—enabling the export notebook to execute standalone without additional setup
+
+**Performance**: Both notebooks initialize matplotlib and import optimized figure management routines once per kernel session. This eliminates per-cell code injection overhead compared to earlier versions (~2-3KB per cell reduced to ~500 bytes per cell).
 
 ## Development Quality Gates
 

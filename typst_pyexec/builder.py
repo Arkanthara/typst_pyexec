@@ -10,6 +10,7 @@ import logging
 import os
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from typst_pyexec.core.cache import CacheStore
@@ -81,9 +82,7 @@ class Builder:
         t0 = time.perf_counter()
         logger.info("Building %s", self.source)
 
-        previous_cwd = Path.cwd()
-        os.chdir(self.source.parent)
-        try:
+        with _pushd(self.source.parent):
             source_text = self.source.read_text(encoding="utf-8")
             cells = self._parser.parse(source_text)
 
@@ -95,6 +94,7 @@ class Builder:
 
             self._dag.build(cells)
             groups = self._scheduler.schedule(self._dag)
+            cell_hashes = self._compute_cell_hashes(cells)
 
             executor = Executor(
                 kernel=self._kernel,
@@ -104,7 +104,7 @@ class Builder:
                 n_jobs=self.n_jobs,
             )
 
-            changed_ids = self._detect_changed_cells(cells)
+            changed_ids = self._detect_changed_cells(cells, cell_hashes)
             refresh_ids = {
                 c.cell_id
                 for c in cells
@@ -116,21 +116,25 @@ class Builder:
             cells_to_run = self._dag.affected(changed_ids) | refresh_ids
             logger.info("%d/%d cells need execution", len(cells_to_run), len(cells))
 
-            results = executor.run(cells, groups, cells_to_run, dag=self._dag)
+            results = executor.run(
+                cells,
+                groups,
+                cells_to_run,
+                dag=self._dag,
+                cell_hashes=cell_hashes,
+            )
 
             # Render and inject
             output_text = self._renderer.inject(source_text, cells, results)
             self._intermediate.write_text(output_text, encoding="utf-8")
 
-            # Persist notebook
-            self._renderer.sync_notebook(cells, results, self._state_dir / "notebook.ipynb")
+            # Persist notebooks for both normal replay and figure-export replay.
+            self._renderer.sync_notebooks(cells, results, working_dir=self.source.parent)
 
             elapsed = (time.perf_counter() - t0) * 1000
             logger.info("Build finished in %.1f ms", elapsed)
 
             self._compile()
-        finally:
-            os.chdir(previous_cwd)
 
     def watch(self) -> None:
         """Watch the source file and rebuild on every change."""
@@ -175,17 +179,25 @@ class Builder:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _detect_changed_cells(self, cells: list[Cell]) -> set[str]:
+    def _compute_cell_hashes(self, cells: list[Cell]) -> dict[str, str]:
+        """Return source hashes for executable cells."""
+        return {
+            cell.cell_id: sha256_text(cell.source)
+            for cell in cells
+            if _as_bool(cell.metadata.get("execute"), True)
+        }
+
+    def _detect_changed_cells(
+        self, cells: list[Cell], cell_hashes: dict[str, str] | None = None
+    ) -> set[str]:
         """Return IDs of cells whose source hash is not present in cache."""
-        changed: set[str] = set()
-        for cell in cells:
-            if not _as_bool(cell.metadata.get("execute"), True):
-                continue
-            h = sha256_text(cell.source)
-            cached = self._cache.load_by_hash(h)
-            if cached is None:
-                changed.add(cell.cell_id)
-        return changed
+        hashes = cell_hashes or self._compute_cell_hashes(cells)
+        return {
+            cell.cell_id
+            for cell in cells
+            if _as_bool(cell.metadata.get("execute"), True)
+            and self._cache.load_by_hash(hashes[cell.cell_id]) is None
+        }
 
     def _compile(self) -> None:
         """Invoke the Typst compiler on the intermediate document."""
@@ -216,3 +228,13 @@ def _as_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@contextmanager
+def _pushd(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)

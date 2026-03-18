@@ -94,3 +94,21 @@ def test_block_options_must_be_at_top():
     c = cells[0]
     assert "execute" not in c.options
     assert "%| execute: false" in c.source
+
+
+def test_indented_python_fence_is_dedented_for_execution():
+    src = """
+Some text.
+
+    ```python
+    x = 1
+    if x:
+        print(x)
+    ```
+"""
+    cells = _parse(src)
+    assert len(cells) == 1
+    # Block-wide padding is removed, relative indentation is preserved.
+    assert cells[0].source.startswith("x = 1")
+    assert "if x:" in cells[0].source
+    assert "    print(x)" in cells[0].source

@@ -5,10 +5,16 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Literal
 
 import nbformat
 
-from typst_pyexec.core.executor import CellResult
+from typst_pyexec.core.executor import (
+    CellResult,
+    _effective_plot_options,
+    _figure_postamble,
+    _figure_preamble,
+)
 from typst_pyexec.core.parser import Cell
 
 logger = logging.getLogger(__name__)
@@ -100,7 +106,11 @@ class Renderer:
             result = results.get(cell.cell_id)
             if result is None:
                 continue
-            rendered = self.render_cell(cell, result)
+            rendered = self._render_cell_with_indent(
+                cell,
+                result,
+                block_indent=match.group("indent") or "",
+            )
             # Replace the matched region
             start, end = match.start(), match.end()
             pieces[start:end] = list(rendered)
@@ -114,6 +124,15 @@ class Renderer:
 
     def render_cell(self, cell: Cell, result: CellResult) -> str:
         """Return Typst markup for *result*."""
+        return self._render_cell_with_indent(cell, result, block_indent="")
+
+    def _render_cell_with_indent(
+        self,
+        cell: Cell,
+        result: CellResult,
+        block_indent: str,
+    ) -> str:
+        """Return Typst markup for *result* preserving block indentation."""
         parts: list[str] = []
         raw_enabled = _option_bool(cell, "raw", True)
         figure_enabled = _option_bool(cell, "figure", True)
@@ -122,7 +141,8 @@ class Renderer:
             parts.append(_render_source(cell.source))
 
         if not _option_bool(cell, "execute", True):
-            return "\n".join(parts) if parts else ""
+            rendered = "\n".join(parts) if parts else ""
+            return _indent_block(rendered, block_indent)
 
         if raw_enabled and result.error:
             parts.append(_render_error(result.error))
@@ -147,7 +167,8 @@ class Renderer:
                 if txt:
                     parts.append(_render_stdout(txt))
 
-        return "\n".join(parts) if parts else ""
+        rendered = "\n".join(parts) if parts else ""
+        return _indent_block(rendered, block_indent)
 
     # ------------------------------------------------------------------
     # Notebook synchronisation
@@ -158,6 +179,9 @@ class Renderer:
         cells: list[Cell],
         results: dict[str, CellResult],
         notebook_path: Path,
+        *,
+        mode: Literal["normal", "export"] = "normal",
+        working_dir: Path | None = None,
     ) -> None:
         """Write or update the persistent ``.ipynb`` notebook file."""
         if notebook_path.exists():
@@ -174,10 +198,24 @@ class Renderer:
             nb = nbformat.v4.new_notebook()
 
         nb_cells: list = []
+        if working_dir is not None:
+            setup_source = (
+                _export_notebook_setup_source(working_dir)
+                if mode == "export"
+                else _notebook_chdir_source(working_dir)
+            )
+            nb_cells.append(nbformat.v4.new_code_cell(setup_source))
+
         for cell in cells:
             result = results.get(cell.cell_id)
-            nc = nbformat.v4.new_code_cell(cell.source)
+            cell_source = (
+                _export_mode_source(cell, self._figures_dir, working_dir)
+                if mode == "export"
+                else cell.source
+            )
+            nc = nbformat.v4.new_code_cell(cell_source)
             nc["metadata"]["typst_pyexec_cell_id"] = cell.cell_id
+            nc["metadata"]["typst_pyexec_mode"] = mode
             if result:
                 nc.outputs = _result_to_nb_outputs(result)
             nb_cells.append(nc)
@@ -185,6 +223,28 @@ class Renderer:
         nb.cells = nb_cells
         nbformat.write(nb, notebook_path.open("w", encoding="utf-8"))
         logger.debug("Notebook synchronised: %s", notebook_path)
+
+    def sync_notebooks(
+        self,
+        cells: list[Cell],
+        results: dict[str, CellResult],
+        working_dir: Path,
+    ) -> None:
+        """Write both the normal and export-mode notebook representations."""
+        self.sync_notebook(
+            cells,
+            results,
+            self._state_dir / "notebook.ipynb",
+            mode="normal",
+            working_dir=working_dir,
+        )
+        self.sync_notebook(
+            cells,
+            results,
+            self._state_dir / "notebook_export.ipynb",
+            mode="export",
+            working_dir=working_dir,
+        )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -283,6 +343,12 @@ def _render_source(source: str) -> str:
 def _render_error(traceback: str) -> str:
     clean = re.sub(r"\x1b\[[0-9;]*m", "", traceback)
     return f'#raw("{_escape_raw(clean.rstrip())}", lang: "traceback")\n'
+
+
+def _indent_block(text: str, indent: str) -> str:
+    if not text or not indent:
+        return text
+    return "\n".join(f"{indent}{line}" if line else indent for line in text.split("\n"))
 
 
 def _escape_raw(text: str) -> str:
@@ -488,3 +554,37 @@ def _result_to_nb_outputs(result: CellResult) -> list:
     for bundle in result.display_data:
         outputs.append(nbformat.v4.new_output("display_data", data=bundle, metadata={}))
     return outputs
+
+
+def _notebook_chdir_source(working_dir: Path) -> str:
+    safe_dir = str(working_dir).replace("\\", "\\\\")
+    return (
+        "import os\n"
+        f'os.chdir("{safe_dir}")\n'
+        f'print("typst_pyexec working directory: {safe_dir}")\n'
+    )
+
+
+def _export_notebook_setup_source(working_dir: Path) -> str:
+    """Return setup code for export notebook with all necessary imports."""
+    safe_dir = str(working_dir).replace("\\", "\\\\")
+    return (
+        "import os\n"
+        "import matplotlib.pyplot as plt\n"
+        "from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata\n"
+        f'os.chdir("{safe_dir}")\n'
+        f'print("typst_pyexec working directory: {safe_dir}")\n'
+    )
+
+
+def _export_mode_source(cell: Cell, figures_dir: Path, working_dir: Path | None) -> str:
+    cwd = working_dir or Path.cwd()
+    preamble = _figure_preamble(
+        cell.cell_id,
+        str(figures_dir),
+        str(cwd),
+        keep_subplots=_option_bool(cell, "keep-subplots", False),
+        plot_options=_effective_plot_options(cell),
+    ).rstrip("\n")
+    postamble = _figure_postamble().rstrip("\n")
+    return f"{preamble}\n{cell.source.rstrip()}\n{postamble}\n"

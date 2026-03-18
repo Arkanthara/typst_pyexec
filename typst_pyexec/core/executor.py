@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import logging
@@ -19,6 +20,15 @@ logger = logging.getLogger(__name__)
 _FIGURE_SENTINEL_PREFIX = "__typst_pyexec_FIGURE__:"
 _FIGMETA_SENTINEL_PREFIX = "__typst_pyexec_FIGMETA__:"
 _CACHE_SCHEMA_VERSION = 2
+_DEFAULT_PLOT_OPTIONS: dict[str, object] = {
+    "lines.linewidth": 0.8,
+    "axes.linewidth": 0.6,
+    "grid.linewidth": 0.2,
+    "axes.grid": True,
+    # Matplotlib scatter default uses `lines.markersize ** 2` as area.
+    # 4.2426... gives ~18pt^2 vs default 36pt^2 (about 2x smaller area).
+    "lines.markersize": 4,
+}
 
 
 class CellResult:
@@ -139,6 +149,7 @@ class Executor:
         self._figures_dir = figures_dir
         self._working_dir = working_dir
         self._n_jobs = n_jobs
+        self._runtime_initialized = False
 
     def run(
         self,
@@ -146,6 +157,7 @@ class Executor:
         groups: list[ExecutionGroup],
         cells_to_run: set[str],
         dag: DependencyGraph | None = None,
+        cell_hashes: dict[str, str] | None = None,
     ) -> dict[str, CellResult]:
         """Execute all cells respecting dependency order.
 
@@ -164,16 +176,21 @@ class Executor:
             Mapping of cell_id → result for every cell.
         """
         effective_to_run = set(cells_to_run)
+        cell_map = {c.cell_id: c for c in cells}
+        execute_enabled = {
+            cid: _option_bool(cell, "execute", True) for cid, cell in cell_map.items()
+        }
+        hash_by_id = self._build_hash_map(cells, execute_enabled, cell_hashes)
+        cache_entries: dict[str, dict | None] = {}
 
         # Fast path: all outputs are cache hits, no kernel startup needed.
         if not effective_to_run and self._cache is not None:
-            cell_map: dict[str, Cell] = {c.cell_id: c for c in cells}
             cached_results: dict[str, CellResult] = {}
-            for cid, cell in cell_map.items():
-                if not _option_bool(cell, "execute", True):
+            for cid in cell_map:
+                if not execute_enabled[cid]:
                     cached_results[cid] = CellResult(cell_id=cid, from_cache=True)
                     continue
-                entry = self._cache.load_by_hash(sha256_text(cell.source))
+                entry = self._load_cache_entry(cid, hash_by_id, cache_entries)
                 if entry is None:
                     effective_to_run.add(cid)
                     continue
@@ -185,6 +202,11 @@ class Executor:
                 return cached_results
 
         self._kernel.ensure_running()
+
+        # Initialize runtime (matplotlib, imports) once per kernel
+        if not self._runtime_initialized:
+            self._kernel.initialize_runtime()
+            self._runtime_initialized = True
 
         # On a cold kernel, unchanged prerequisite cells must run once to
         # rebuild namespace before target cells can execute.
@@ -199,37 +221,28 @@ class Executor:
                 len(effective_to_run),
             )
 
-        cell_map = {c.cell_id: c for c in cells}
         results: dict[str, CellResult] = {}
 
         for group in groups:
-            # Separate cells that can be served from cache
-            to_execute = [
-                cid
-                for cid in group
-                if cid in effective_to_run
-                and _option_bool(cell_map[cid], "execute", True)
-            ]
-            cached_ids = [cid for cid in group if cid not in effective_to_run]
-
-            # Load cached results
-            for cid in cached_ids:
-                cell = cell_map[cid]
-                if not _option_bool(cell, "execute", True):
+            to_execute: list[str] = []
+            for cid in group:
+                if not execute_enabled[cid]:
                     results[cid] = CellResult(cell_id=cid, from_cache=True)
                     continue
-                h = sha256_text(cell.source)
-                if self._cache:
-                    entry = self._cache.load_by_hash(h)
-                    if entry:
-                        if _is_stale_cache_entry(entry):
-                            logger.info("Refreshing stale cache for cell %s.", cid)
-                            to_execute.append(cid)
-                            continue
-                        results[cid] = CellResult.from_dict(entry, cell_id=cid)
-                        logger.debug("Cell %s served from cache.", cid)
+                if cid in effective_to_run:
+                    to_execute.append(cid)
+                    continue
+
+                entry = self._load_cache_entry(cid, hash_by_id, cache_entries)
+                if entry is not None:
+                    if _is_stale_cache_entry(entry):
+                        logger.info("Refreshing stale cache for cell %s.", cid)
+                        to_execute.append(cid)
                         continue
-                # Fallback: mark as needing execution
+                    results[cid] = CellResult.from_dict(entry, cell_id=cid)
+                    logger.debug("Cell %s served from cache.", cid)
+                    continue
+
                 to_execute.append(cid)
 
             # Execute cells that need running.
@@ -244,6 +257,40 @@ class Executor:
 
         return results
 
+    def _build_hash_map(
+        self,
+        cells: list[Cell],
+        execute_enabled: dict[str, bool],
+        provided_hashes: dict[str, str] | None,
+    ) -> dict[str, str]:
+        if provided_hashes is not None:
+            return provided_hashes
+        return {
+            cell.cell_id: sha256_text(cell.source)
+            for cell in cells
+            if execute_enabled.get(cell.cell_id, True)
+        }
+
+    def _load_cache_entry(
+        self,
+        cell_id: str,
+        hash_by_id: dict[str, str],
+        cache_entries: dict[str, dict | None],
+    ) -> dict | None:
+        if self._cache is None:
+            return None
+        if cell_id in cache_entries:
+            return cache_entries[cell_id]
+
+        source_hash = hash_by_id.get(cell_id)
+        if source_hash is None:
+            cache_entries[cell_id] = None
+            return None
+
+        entry = self._cache.load_by_hash(source_hash)
+        cache_entries[cell_id] = entry
+        return entry
+
     # ------------------------------------------------------------------
     # Single-cell execution
     # ------------------------------------------------------------------
@@ -251,6 +298,12 @@ class Executor:
     def _execute_one(self, cell: Cell) -> CellResult:
         """Execute *cell* in the kernel and return a :class:`CellResult`."""
         logger.info("Executing cell %s…", cell.cell_id)
+        effective_plot_options = _effective_plot_options(cell)
+        logger.info(
+            "Cell %s effective plot rcParams: %s",
+            cell.cell_id,
+            json.dumps(effective_plot_options, sort_keys=True),
+        )
 
         # Inject figure-capture preamble before user code
         preamble = _figure_preamble(
@@ -258,6 +311,7 @@ class Executor:
             str(self._figures_dir),
             str(self._working_dir),
             keep_subplots=_option_bool(cell, "keep-subplots", False),
+            plot_options=effective_plot_options,
         )
         main_code = preamble + "\n" + cell.source
         raw_main = self._execute_with_recovery(main_code, cell.cell_id)
@@ -271,9 +325,9 @@ class Executor:
                 "Cell %s raised an error:\n%s", cell.cell_id, raw.get("error", "")
             )
 
-        # Extract figure paths from stdout sentinel
-        figures = _extract_figures(raw.get("stdout", ""))
-        clean_stdout = _strip_figure_sentinels(raw.get("stdout", ""))
+        clean_stdout, figures, figure_metadata = _parse_stdout_payload(
+            raw.get("stdout", "")
+        )
 
         # Extract inline images from display_data
         inline_figures = _extract_inline_images(
@@ -289,7 +343,7 @@ class Executor:
             stderr=raw.get("stderr", ""),
             display_data=raw.get("display_data", []),
             figures=figures,
-            figure_metadata=_extract_figure_metadata(raw.get("stdout", "")),
+            figure_metadata=figure_metadata,
             error=raw.get("error"),
             status=raw.get("status", "ok"),
             from_cache=False,
@@ -317,231 +371,65 @@ def _figure_preamble(
     figures_dir: str,
     working_dir: str,
     keep_subplots: bool,
+    plot_options: dict[str, object] | None = None,
 ) -> str:
-    """Return Python code that will save matplotlib figures after this cell."""
+    """Return minimal Python code to initialize figure tracking for this cell."""
     safe_dir = figures_dir.replace("\\", "\\\\")
     safe_working_dir = working_dir.replace("\\", "\\\\")
     safe_id = cell_id.replace('"', '\\"')
+    plot_options_expr = repr(plot_options or {})
     return f"""\
-import os as __os_typst_pyexec
-import matplotlib as __mpl_typst_pyexec
-__mpl_typst_pyexec.use("Agg")
-import matplotlib.pyplot as __plt_typst_pyexec
-__os_typst_pyexec.chdir("{safe_working_dir}")
-__typst_pyexec_figs_before = set(__plt_typst_pyexec.get_fignums())
-__typst_pyexec_cell_id = "{safe_id}"
-__typst_pyexec_figures_dir = "{safe_dir}"
-__typst_pyexec_keep_subplots = {"True" if keep_subplots else "False"}
+os.chdir("{safe_working_dir}")
+plt.rcParams.update({plot_options_expr})
+__typst_pyexec_ctx = CellFigureContext("{safe_id}", "{safe_dir}", keep_subplots={str(keep_subplots)})
 """
 
 
 def _figure_postamble() -> str:
-    return r"""
-import os as __os_typst_pyexec
-import json as __json_typst_pyexec
-__typst_pyexec_new_figs = [n for n in __plt_typst_pyexec.get_fignums()
-                      if n not in __typst_pyexec_figs_before]
-
-__typst_pyexec_pad_left_in = 0.55
-__typst_pyexec_pad_right_in = 0.15
-__typst_pyexec_pad_bottom_in = 0.45
-__typst_pyexec_pad_top_in = 0.20
-
-
-def __typst_pyexec_axis_title(__typst_pyexec_ax):
-    return (
-        (__typst_pyexec_ax.get_title(loc="center") or "")
-        or (__typst_pyexec_ax.get_title(loc="left") or "")
-        or (__typst_pyexec_ax.get_title(loc="right") or "")
-    )
-
-
-def __typst_pyexec_clear_axis_title(__typst_pyexec_ax):
-    __typst_pyexec_ax.set_title("")
-    __typst_pyexec_ax.set_title("", loc="left")
-    __typst_pyexec_ax.set_title("", loc="right")
-
-
-def __typst_pyexec_save_transparent(__typst_pyexec_fig, __typst_pyexec_stem, __typst_pyexec_bbox, __typst_pyexec_png_dpi):
-    __typst_pyexec_path_svg = __os_typst_pyexec.path.join(
-        __typst_pyexec_figures_dir, f"{__typst_pyexec_stem}.svg"
-    )
-    __typst_pyexec_path_out = __typst_pyexec_path_svg
-    try:
-        __typst_pyexec_fig.savefig(
-            __typst_pyexec_path_svg,
-            format="svg",
-            bbox_inches=__typst_pyexec_bbox,
-            transparent=True,
-        )
-    except Exception:
-        __typst_pyexec_path_out = __os_typst_pyexec.path.join(
-            __typst_pyexec_figures_dir, f"{__typst_pyexec_stem}.png"
-        )
-        __typst_pyexec_fig.savefig(
-            __typst_pyexec_path_out,
-            format="png",
-            bbox_inches=__typst_pyexec_bbox,
-            dpi=__typst_pyexec_png_dpi,
-            transparent=True,
-        )
-    return __typst_pyexec_path_out
-
-
-for __typst_pyexec_fn in __typst_pyexec_new_figs:
-    __typst_pyexec_fig = __plt_typst_pyexec.figure(__typst_pyexec_fn)
-    __typst_pyexec_suptitle = ""
-    if __typst_pyexec_fig._suptitle is not None:
-        __typst_pyexec_suptitle = __typst_pyexec_fig._suptitle.get_text() or ""
-    if (not __typst_pyexec_keep_subplots) and len(__typst_pyexec_fig.axes) > 1:
-        try:
-            __typst_pyexec_suptitle_obj = __typst_pyexec_fig._suptitle
-            if __typst_pyexec_suptitle_obj is not None:
-                __typst_pyexec_suptitle_obj.set_text("")
-            for __typst_pyexec_ax_i, __typst_pyexec_ax in enumerate(__typst_pyexec_fig.axes, start=1):
-                __typst_pyexec_stem = f"{__typst_pyexec_cell_id}_{__typst_pyexec_fn}_{__typst_pyexec_ax_i}"
-                __typst_pyexec_title = __typst_pyexec_axis_title(__typst_pyexec_ax)
-                __typst_pyexec_layout_state = []
-                for __typst_pyexec_other_ax in __typst_pyexec_fig.axes:
-                    __typst_pyexec_layout_state.append((
-                        __typst_pyexec_other_ax,
-                        __typst_pyexec_other_ax.get_visible(),
-                        __typst_pyexec_other_ax.get_position().frozen(),
-                    ))
-                    if __typst_pyexec_other_ax is __typst_pyexec_ax:
-                        __typst_pyexec_other_ax.set_visible(True)
-                    else:
-                        __typst_pyexec_other_ax.set_visible(False)
-                __typst_pyexec_clear_axis_title(__typst_pyexec_ax)
-                __typst_pyexec_fig.canvas.draw()
-                __typst_pyexec_pos = __typst_pyexec_ax.get_position().frozen()
-                __typst_pyexec_fig_w, __typst_pyexec_fig_h = __typst_pyexec_fig.get_size_inches()
-                __typst_pyexec_x0 = max(0.0, __typst_pyexec_pos.x0 - (__typst_pyexec_pad_left_in / __typst_pyexec_fig_w))
-                __typst_pyexec_x1 = min(1.0, __typst_pyexec_pos.x1 + (__typst_pyexec_pad_right_in / __typst_pyexec_fig_w))
-                __typst_pyexec_y0 = max(0.0, __typst_pyexec_pos.y0 - (__typst_pyexec_pad_bottom_in / __typst_pyexec_fig_h))
-                __typst_pyexec_y1 = min(1.0, __typst_pyexec_pos.y1 + (__typst_pyexec_pad_top_in / __typst_pyexec_fig_h))
-                __typst_pyexec_bbox = __mpl_typst_pyexec.transforms.Bbox.from_extents(
-                    __typst_pyexec_x0 * __typst_pyexec_fig_w,
-                    __typst_pyexec_y0 * __typst_pyexec_fig_h,
-                    __typst_pyexec_x1 * __typst_pyexec_fig_w,
-                    __typst_pyexec_y1 * __typst_pyexec_fig_h,
-                )
-                __typst_pyexec_path = __typst_pyexec_save_transparent(
-                    __typst_pyexec_fig,
-                    __typst_pyexec_stem,
-                    __typst_pyexec_bbox,
-                    __typst_pyexec_png_dpi=200,
-                )
-                for __typst_pyexec_other_ax, __typst_pyexec_visible, __typst_pyexec_position in __typst_pyexec_layout_state:
-                    __typst_pyexec_other_ax.set_visible(__typst_pyexec_visible)
-                    __typst_pyexec_other_ax.set_position(__typst_pyexec_position)
-                __typst_pyexec_spec = __typst_pyexec_ax.get_subplotspec()
-                __typst_pyexec_rows, __typst_pyexec_cols = (1, len(__typst_pyexec_fig.axes))
-                __typst_pyexec_row, __typst_pyexec_col = (__typst_pyexec_ax_i - 1, __typst_pyexec_ax_i - 1)
-                if __typst_pyexec_spec is not None:
-                    __typst_pyexec_gs = __typst_pyexec_spec.get_gridspec()
-                    __typst_pyexec_rows, __typst_pyexec_cols = __typst_pyexec_gs.nrows, __typst_pyexec_gs.ncols
-                    __typst_pyexec_row = __typst_pyexec_spec.rowspan.start
-                    __typst_pyexec_col = __typst_pyexec_spec.colspan.start
-
-                print(f"__typst_pyexec_FIGURE__:{__typst_pyexec_path}")
-                print("__typst_pyexec_FIGMETA__:" + __json_typst_pyexec.dumps({
-                    "path": __typst_pyexec_path,
-                    "figure": __typst_pyexec_fn,
-                    "subplot": __typst_pyexec_ax_i,
-                    "is_subplot": True,
-                    "title": __typst_pyexec_title,
-                    "suptitle": __typst_pyexec_suptitle,
-                    "row": __typst_pyexec_row,
-                    "col": __typst_pyexec_col,
-                    "rows": __typst_pyexec_rows,
-                    "cols": __typst_pyexec_cols,
-                }))
-        except Exception:
-            __typst_pyexec_stem = f"{__typst_pyexec_cell_id}_{__typst_pyexec_fn}"
-            __typst_pyexec_fig_title = __typst_pyexec_fig.axes[0].get_title() if __typst_pyexec_fig.axes else ""
-            if __typst_pyexec_fig_title:
-                __typst_pyexec_clear_axis_title(__typst_pyexec_fig.axes[0])
-                __typst_pyexec_fig.canvas.draw()
-            __typst_pyexec_path = __typst_pyexec_save_transparent(
-                __typst_pyexec_fig,
-                __typst_pyexec_stem,
-                __typst_pyexec_bbox="tight",
-                __typst_pyexec_png_dpi=150,
-            )
-            print(f"__typst_pyexec_FIGURE__:{__typst_pyexec_path}")
-            print("__typst_pyexec_FIGMETA__:" + __json_typst_pyexec.dumps({
-                "path": __typst_pyexec_path,
-                "figure": __typst_pyexec_fn,
-                "subplot": 1,
-                "is_subplot": False,
-                "title": __typst_pyexec_fig_title,
-                "suptitle": __typst_pyexec_suptitle,
-                "row": 0,
-                "col": 0,
-                "rows": 1,
-                "cols": 1,
-            }))
-    else:
-        __typst_pyexec_stem = f"{__typst_pyexec_cell_id}_{__typst_pyexec_fn}"
-        __typst_pyexec_fig_title = __typst_pyexec_fig.axes[0].get_title() if __typst_pyexec_fig.axes else ""
-        if __typst_pyexec_fig_title:
-            __typst_pyexec_clear_axis_title(__typst_pyexec_fig.axes[0])
-            __typst_pyexec_fig.canvas.draw()
-        __typst_pyexec_path_out = __typst_pyexec_save_transparent(
-            __typst_pyexec_fig,
-            __typst_pyexec_stem,
-            __typst_pyexec_bbox="tight",
-            __typst_pyexec_png_dpi=150,
-        )
-        print(f"__typst_pyexec_FIGURE__:{__typst_pyexec_path_out}")
-        print("__typst_pyexec_FIGMETA__:" + __json_typst_pyexec.dumps({
-            "path": __typst_pyexec_path_out,
-            "figure": __typst_pyexec_fn,
-            "subplot": 1,
-            "is_subplot": False,
-            "title": __typst_pyexec_fig_title,
-            "suptitle": __typst_pyexec_suptitle,
-            "row": 0,
-            "col": 0,
-            "rows": 1,
-            "cols": 1,
-        }))
-    __plt_typst_pyexec.close(__typst_pyexec_fig)
+    """Return minimal code to invoke optimized figure saving."""
+    return """
+save_figures_and_metadata(__typst_pyexec_ctx)
 """
 
 
 def _extract_figures(stdout: str) -> list[str]:
-    paths: list[str] = []
-    for line in stdout.splitlines():
-        if line.startswith(_FIGURE_SENTINEL_PREFIX):
-            paths.append(line[len(_FIGURE_SENTINEL_PREFIX) :].strip())
+    _, paths, _ = _parse_stdout_payload(stdout)
     return paths
 
 
 def _extract_figure_metadata(stdout: str) -> list[dict]:
-    meta: list[dict] = []
-    for line in stdout.splitlines():
-        if not line.startswith(_FIGMETA_SENTINEL_PREFIX):
-            continue
-        payload = line[len(_FIGMETA_SENTINEL_PREFIX) :].strip()
-        try:
-            obj = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            meta.append(obj)
+    _, _, meta = _parse_stdout_payload(stdout)
     return meta
 
 
 def _strip_figure_sentinels(stdout: str) -> str:
-    lines = [
-        line
-        for line in stdout.splitlines()
-        if not line.startswith(_FIGURE_SENTINEL_PREFIX)
-        and not line.startswith(_FIGMETA_SENTINEL_PREFIX)
-    ]
-    return "\n".join(lines)
+    clean_stdout, _, _ = _parse_stdout_payload(stdout)
+    return clean_stdout
+
+
+def _parse_stdout_payload(stdout: str) -> tuple[str, list[str], list[dict]]:
+    clean_lines: list[str] = []
+    figures: list[str] = []
+    metadata: list[dict] = []
+
+    for line in stdout.splitlines():
+        if line.startswith(_FIGURE_SENTINEL_PREFIX):
+            figures.append(line[len(_FIGURE_SENTINEL_PREFIX) :].strip())
+            continue
+
+        if line.startswith(_FIGMETA_SENTINEL_PREFIX):
+            payload = line[len(_FIGMETA_SENTINEL_PREFIX) :].strip()
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                metadata.append(obj)
+            continue
+
+        clean_lines.append(line)
+
+    return "\n".join(clean_lines), figures, metadata
 
 
 def _extract_inline_images(
@@ -570,6 +458,50 @@ def _option_bool(cell: Cell, key: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _plot_options(cell: Cell) -> dict[str, object]:
+    """Return matplotlib rcParams overrides from `%| plt-*` metadata."""
+    options: dict[str, object] = {}
+    for key, value in cell.metadata.items():
+        if not key.startswith("plt-"):
+            continue
+        rc_param = key[4:].strip()
+        if not rc_param:
+            continue
+        options[rc_param] = _parse_plot_option_value(value)
+    return options
+
+
+def _effective_plot_options(cell: Cell) -> dict[str, object]:
+    """Return final rcParams for a cell with precedence defaults < `%| plt-*`."""
+    return {**_DEFAULT_PLOT_OPTIONS, **_plot_options(cell)}
+
+
+def _parse_plot_option_value(value: str) -> object:
+    """Parse `%| plt-*` option values to Python primitives when possible."""
+    raw = value.strip()
+    if not raw:
+        return ""
+
+    lower = raw.lower()
+    if lower in {"none", "null"}:
+        return None
+    if lower in {"true", "yes", "on"}:
+        return True
+    if lower in {"false", "no", "off"}:
+        return False
+
+    # Prefer JSON for numbers/lists/objects; fall back to Python literals.
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        return ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        return raw
 
 
 def _merge_kernel_results(primary: dict, secondary: dict) -> dict:
