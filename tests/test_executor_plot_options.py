@@ -55,9 +55,9 @@ def test_effective_plot_options_defaults_are_applied() -> None:
     assert _effective_plot_options(cell) == {
         "lines.linewidth": 0.8,
         "axes.linewidth": 0.6,
-            "grid.linewidth": 0.4,
+        "grid.linewidth": 0.2,
         "axes.grid": True,
-        "lines.markersize": 4.242640687119285,
+        "lines.markersize": 4,
     }
 
 
@@ -71,7 +71,7 @@ def test_effective_plot_options_metadata_overrides_defaults() -> None:
     assert _effective_plot_options(cell) == {
         "lines.linewidth": 1.2,
         "axes.linewidth": 0.6,
-            "grid.linewidth": 0.4,
+        "grid.linewidth": 0.2,
         "axes.grid": False,
-        "lines.markersize": 4.242640687119285,
+        "lines.markersize": 4,
     }

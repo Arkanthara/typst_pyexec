@@ -14,6 +14,7 @@ from typst_pyexec.core.kernel import KernelManager
 from typst_pyexec.core.parser import Cell
 from typst_pyexec.core.scheduler import ExecutionGroup
 from typst_pyexec.utils.hashing import sha256_text
+from typst_pyexec.utils.options import cell_option_bool
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,9 @@ class Executor:
         self._working_dir = working_dir
         self._n_jobs = n_jobs
         self._runtime_initialized = False
+        # Tracks cells whose code has been executed in the current kernel session.
+        # Cache hits alone do not populate Python namespace state.
+        self._executed_cells: set[str] = set()
 
     def run(
         self,
@@ -178,7 +182,8 @@ class Executor:
         effective_to_run = set(cells_to_run)
         cell_map = {c.cell_id: c for c in cells}
         execute_enabled = {
-            cid: _option_bool(cell, "execute", True) for cid, cell in cell_map.items()
+            cid: cell_option_bool(cell, "execute", True)
+            for cid, cell in cell_map.items()
         }
         hash_by_id = self._build_hash_map(cells, execute_enabled, cell_hashes)
         cache_entries: dict[str, dict | None] = {}
@@ -190,14 +195,15 @@ class Executor:
                 if not execute_enabled[cid]:
                     cached_results[cid] = CellResult(cell_id=cid, from_cache=True)
                     continue
-                entry = self._load_cache_entry(cid, hash_by_id, cache_entries)
-                if entry is None:
+                cached_result = self._cache_result_for_cell(
+                    cid,
+                    hash_by_id,
+                    cache_entries,
+                )
+                if cached_result is None:
                     effective_to_run.add(cid)
                     continue
-                if _is_stale_cache_entry(entry):
-                    effective_to_run.add(cid)
-                    continue
-                cached_results[cid] = CellResult.from_dict(entry, cell_id=cid)
+                cached_results[cid] = cached_result
             if not effective_to_run:
                 return cached_results
 
@@ -216,10 +222,40 @@ class Executor:
             and dag is not None
         ):
             effective_to_run = dag.required_with_predecessors(effective_to_run)
+            hydrated_ids = sorted(effective_to_run)
             logger.info(
                 "Cold kernel detected; hydrating namespace with %d prerequisite cell(s).",
                 len(effective_to_run),
             )
+            logger.debug(
+                "Hydration plan (cold kernel): %s",
+                ", ".join(hydrated_ids),
+            )
+
+        # Even when the kernel reports namespace state, this process may be
+        # attached to a kernel whose namespace does not contain prerequisites
+        # for the currently changed cells (e.g., reconnect across processes).
+        if effective_to_run and dag is not None:
+            required_predecessors: set[str] = set()
+            for cid in effective_to_run:
+                required_predecessors.update(dag.required_with_predecessors({cid}))
+            missing_namespace_ids = {
+                cid
+                for cid in required_predecessors
+                if execute_enabled.get(cid, True)
+                and cid not in self._executed_cells
+            }
+            if missing_namespace_ids:
+                effective_to_run |= missing_namespace_ids
+                hydrated_ids = sorted(missing_namespace_ids)
+                logger.info(
+                    "Hydrating kernel namespace with %d prerequisite cell(s) not yet executed in this session.",
+                    len(missing_namespace_ids),
+                )
+                logger.info(
+                    "Hydrating prerequisite cells: %s",
+                    ", ".join(hydrated_ids),
+                )
 
         results: dict[str, CellResult] = {}
 
@@ -233,13 +269,13 @@ class Executor:
                     to_execute.append(cid)
                     continue
 
-                entry = self._load_cache_entry(cid, hash_by_id, cache_entries)
-                if entry is not None:
-                    if _is_stale_cache_entry(entry):
-                        logger.info("Refreshing stale cache for cell %s.", cid)
-                        to_execute.append(cid)
-                        continue
-                    results[cid] = CellResult.from_dict(entry, cell_id=cid)
+                cached_result = self._cache_result_for_cell(
+                    cid,
+                    hash_by_id,
+                    cache_entries,
+                )
+                if cached_result is not None:
+                    results[cid] = cached_result
                     logger.debug("Cell %s served from cache.", cid)
                     continue
 
@@ -252,6 +288,7 @@ class Executor:
                 cell = cell_map[cid]
                 result = self._execute_one(cell)
                 results[cid] = result
+                self._executed_cells.add(cid)
                 if self._cache:
                     self._cache.save(cid, cell.source, result.to_dict())
 
@@ -291,6 +328,21 @@ class Executor:
         cache_entries[cell_id] = entry
         return entry
 
+    def _cache_result_for_cell(
+        self,
+        cell_id: str,
+        hash_by_id: dict[str, str],
+        cache_entries: dict[str, dict | None],
+    ) -> CellResult | None:
+        """Return cached cell result when available and fresh."""
+        entry = self._load_cache_entry(cell_id, hash_by_id, cache_entries)
+        if entry is None:
+            return None
+        if _is_stale_cache_entry(entry):
+            logger.info("Refreshing stale cache for cell %s.", cell_id)
+            return None
+        return CellResult.from_dict(entry, cell_id=cell_id)
+
     # ------------------------------------------------------------------
     # Single-cell execution
     # ------------------------------------------------------------------
@@ -310,7 +362,7 @@ class Executor:
             cell.cell_id,
             str(self._figures_dir),
             str(self._working_dir),
-            keep_subplots=_option_bool(cell, "keep-subplots", False),
+            keep_subplots=cell_option_bool(cell, "keep-subplots", False),
             plot_options=effective_plot_options,
         )
         main_code = preamble + "\n" + cell.source
@@ -358,6 +410,10 @@ class Executor:
                 "Kernel error on cell %s: %s — attempting recovery.", cell_id, exc
             )
             self._kernel.restart()
+            self._runtime_initialized = False
+            self._executed_cells.clear()
+            self._kernel.initialize_runtime()
+            self._runtime_initialized = True
             return self._kernel.execute(code)
 
 
@@ -451,13 +507,6 @@ def _extract_inline_images(
             path.write_bytes(base64.b64decode(bundle["image/png"]))
             paths.append(str(path))
     return paths
-
-
-def _option_bool(cell: Cell, key: str, default: bool) -> bool:
-    raw = cell.metadata.get(key)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _plot_options(cell: Cell) -> dict[str, object]:

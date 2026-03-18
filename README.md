@@ -9,12 +9,13 @@ It executes Python fences inside `.typ` files, captures outputs (stdout, figures
 - Reactive dependency graph based on Python AST analysis
 - Incremental execution with source-hash cache
 - Reduced duplicate hashing and cache I/O in the execution pipeline
+- Centralized metadata option parsing for consistent behavior across builder, executor, and renderer
 - Persistent Jupyter kernel between builds
 - Automatic cold-kernel hydration for dependency prerequisites
 - Matplotlib figure export to SVG with PNG fallback
 - Subfigure reconstruction via `figure(grid(...))`
 - DataFrame HTML rendering to Typst `#table(...)`
-- Watch mode with automatic rebuilds
+- Watch mode with automatic rebuilds and live preview (`tinymist preview` preferred)
 
 ## Installation
 
@@ -42,6 +43,12 @@ Watch and rebuild on save:
 typst_pyexec watch document.typ
 ```
 
+Watch with explicit preview backend:
+
+```bash
+typst_pyexec watch document.typ --preview-engine auto
+```
+
 Clean local state directory:
 
 ```bash
@@ -54,6 +61,15 @@ Common options:
 - `--no-cache`: disable cache lookups and force execution
 - `--jobs <n>`: reserved for future multi-kernel scheduling (`-1` default)
 - `--compiler <cmd>`: Typst compiler binary name/path (default `typst`)
+- `watch --preview-engine <auto|tinymist|typst|none>`: select live preview backend
+
+Watch mode behavior:
+
+- Watch mode regenerates `*.typst_pyexec.typ` on each save and delegates rendering to a live preview process.
+- `--preview-engine auto` tries `tinymist preview` first (if `tinymist` is on PATH), then falls back to `typst watch`.
+- `--preview-engine tinymist` prefers `tinymist preview`; if `tinymist` is unavailable it falls back to `typst watch`.
+- `--preview-engine typst` always runs `typst watch`.
+- `--preview-engine none` disables live preview and only refreshes the intermediate file.
 
 ## Block Options (`%|`)
 
@@ -117,6 +133,12 @@ Behavior notes:
 - To re-run on option updates, set `refresh: true`.
 - Build logs include `effective plot rcParams` per executed cell for quick verification.
 
+## Refactor Notes
+
+- Shared option parsing lives in `typst_pyexec/utils/options.py`, removing duplicated boolean parsing logic.
+- Executor cache handling now uses one code path to validate and materialize cached results, reducing branching duplication.
+- Release workflow artifact upload now targets the full `dist/` directory and fails clearly if artifacts are missing.
+
 ## Figure and Caption Behavior
 
 - For single-axis plots, title text is promoted into Typst caption when `caption` is not set.
@@ -133,7 +155,8 @@ Behavior notes:
 5. Capture stdout, display bundles, and figure artifacts
 6. Render Typst fragments per cell
 7. Inject into `document.typst_pyexec.typ`
-8. Compile with Typst compiler
+8. Build mode: compile with Typst compiler
+9. Watch mode: refresh intermediate file and stream live preview via `tinymist preview` or `typst watch`
 
 ## Local State
 

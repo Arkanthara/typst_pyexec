@@ -6,7 +6,7 @@ reusable functions for figure tracking, saving, and metadata extraction.
 
 import json
 import os
-from pathlib import Path
+import uuid
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -137,11 +137,26 @@ def _save_transparent(fig, stem, figures_dir, bbox, png_dpi=150):
     figures_dir = str(figures_dir)
     path_svg = os.path.join(figures_dir, f"{stem}.svg")
     path_out = path_svg
+    tmp_svg = f"{path_svg}.tmp-{uuid.uuid4().hex}"
     try:
-        fig.savefig(path_svg, format="svg", bbox_inches=bbox, transparent=True)
+        fig.savefig(tmp_svg, format="svg", bbox_inches=bbox, transparent=True)
+        os.replace(tmp_svg, path_svg)
     except Exception:
+        if os.path.exists(tmp_svg):
+            try:
+                os.remove(tmp_svg)
+            except OSError:
+                pass
         path_out = os.path.join(figures_dir, f"{stem}.png")
-        fig.savefig(path_out, format="png", bbox_inches=bbox, dpi=png_dpi, transparent=True)
+        tmp_png = f"{path_out}.tmp-{uuid.uuid4().hex}"
+        fig.savefig(
+            tmp_png,
+            format="png",
+            bbox_inches=bbox,
+            dpi=png_dpi,
+            transparent=True,
+        )
+        os.replace(tmp_png, path_out)
     return path_out
 
 

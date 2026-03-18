@@ -62,6 +62,18 @@ class CacheStore:
         except (json.JSONDecodeError, OSError):
             return None
 
+    def latest_hash(self, cell_id: str) -> str | None:
+        """Return most-recent source hash recorded for *cell_id*, if any."""
+        lookup = self._lookup_file(cell_id)
+        if not lookup.exists():
+            return None
+        try:
+            ref = json.loads(lookup.read_text(encoding="utf-8"))
+            h = ref.get("hash")
+            return h if isinstance(h, str) and h else None
+        except (json.JSONDecodeError, OSError):
+            return None
+
     def save(self, cell_id: str, source: str, result: dict) -> None:
         """Persist *result* for *cell_id* with *source*'s hash as key."""
         h = sha256_text(source)

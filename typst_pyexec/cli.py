@@ -30,7 +30,7 @@ def _watch_command(args: argparse.Namespace) -> None:
         n_jobs=args.jobs,
         compiler=args.compiler,
     )
-    builder.watch()
+    builder.watch(preview_engine=args.preview_engine)
 
 
 def _clean_command(args: argparse.Namespace) -> None:
@@ -68,6 +68,15 @@ def _make_parser() -> argparse.ArgumentParser:
     watch_p = sub.add_parser("watch", help="Watch for changes and rebuild.")
     watch_p.add_argument("file", help="Path to .typ source file")
     _add_common_args(watch_p)
+    watch_p.add_argument(
+        "--preview-engine",
+        choices=["auto", "tinymist", "typst", "none"],
+        default="auto",
+        help=(
+            "Live preview backend: auto prefers tinymist preview, then typst watch "
+            "(default: auto)"
+        ),
+    )
     watch_p.set_defaults(func=_watch_command)
 
     # --- clean ---

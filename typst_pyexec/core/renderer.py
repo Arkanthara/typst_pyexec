@@ -16,6 +16,7 @@ from typst_pyexec.core.executor import (
     _figure_preamble,
 )
 from typst_pyexec.core.parser import Cell
+from typst_pyexec.utils.options import cell_option_bool
 
 logger = logging.getLogger(__name__)
 
@@ -134,13 +135,13 @@ class Renderer:
     ) -> str:
         """Return Typst markup for *result* preserving block indentation."""
         parts: list[str] = []
-        raw_enabled = _option_bool(cell, "raw", True)
-        figure_enabled = _option_bool(cell, "figure", True)
+        raw_enabled = cell_option_bool(cell, "raw", True)
+        figure_enabled = cell_option_bool(cell, "figure", True)
 
-        if _option_bool(cell, "echo", True):
+        if cell_option_bool(cell, "echo", True):
             parts.append(_render_source(cell.source))
 
-        if not _option_bool(cell, "execute", True):
+        if not cell_option_bool(cell, "execute", True):
             rendered = "\n".join(parts) if parts else ""
             return _indent_block(rendered, block_indent)
 
@@ -379,13 +380,6 @@ def _format_python_source(source: str) -> str:
         return code
 
 
-def _option_bool(cell: Cell, key: str, default: bool) -> bool:
-    raw = cell.metadata.get(key)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _passthrough_args(cell: Cell, prefix: str) -> list[str]:
     args: list[str] = []
     for key, value in cell.metadata.items():
@@ -583,7 +577,7 @@ def _export_mode_source(cell: Cell, figures_dir: Path, working_dir: Path | None)
         cell.cell_id,
         str(figures_dir),
         str(cwd),
-        keep_subplots=_option_bool(cell, "keep-subplots", False),
+        keep_subplots=cell_option_bool(cell, "keep-subplots", False),
         plot_options=_effective_plot_options(cell),
     ).rstrip("\n")
     postamble = _figure_postamble().rstrip("\n")
