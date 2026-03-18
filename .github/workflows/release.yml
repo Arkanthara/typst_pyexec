@@ -22,7 +22,7 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
 
-      - name: update version
+      - name: Update version from tag
         run: uv version "${GITHUB_REF_NAME#v}"
 
       - name: Verify version matches tag
@@ -42,7 +42,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: dist/*
+          path: dist/
+          if-no-files-found: error
 
   publish:
     runs-on: ubuntu-latest

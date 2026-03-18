@@ -181,3 +181,49 @@ def test_add_new_cell_no_reexecution_of_previous(executor, kernel_state_dir):
     results = executor.run(cells_v2, groups2, {"p2"})
     assert results["p1"].from_cache
     assert not results["p2"].from_cache
+
+
+@pytest.mark.skipif(SKIP, reason="Kernel tests disabled")
+def test_dependent_cell_hydrates_predecessors_after_kernel_reset(tmp_path):
+    """Dependent cells should replay prerequisites into namespace when needed."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    figures_dir = state_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    kernel = KernelManager(state_dir)
+    cache = CacheStore(state_dir / "cache")
+    executor = Executor(
+        kernel=kernel,
+        cache=cache,
+        figures_dir=figures_dir,
+        working_dir=tmp_path,
+    )
+
+    cells = [
+        _make_cell("c1", "directional_changes_returns = [1, 2, 3]", 0),
+        _make_cell("c2", "print(directional_changes_returns[0])", 1),
+    ]
+    dag = DependencyGraph()
+    dag.build(cells)
+    groups = Scheduler().schedule(dag)
+
+    try:
+        # Prime cache and namespace.
+        first = executor.run(cells, groups, {"c1", "c2"}, dag=dag)
+        assert first["c2"].status == "ok"
+
+        # Simulate a reconnected session where prerequisite names are missing.
+        # Keep runtime imports intact, but remove dependency variable and clear
+        # executor-local "executed in this session" tracking.
+        kernel.execute("del directional_changes_returns")
+        kernel._has_namespace_state = True  # type: ignore[attr-defined]
+        executor._executed_cells.clear()  # type: ignore[attr-defined]
+
+        # Re-executing only dependent cell must hydrate c1 first.
+        second = executor.run(cells, groups, {"c2"}, dag=dag)
+        assert second["c2"].status == "ok"
+        assert "1" in second["c2"].stdout
+        assert not second["c1"].from_cache
+    finally:
+        kernel.shutdown()

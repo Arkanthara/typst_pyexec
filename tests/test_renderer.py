@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import nbformat
+
 from typst_pyexec.core.executor import CellResult
 from typst_pyexec.core.parser import Cell
 from typst_pyexec.core.renderer import (
@@ -153,3 +155,68 @@ def test_render_figures_uses_png_when_svg_path_missing(tmp_path: Path) -> None:
     meta = [{"path": str(state / "plot.svg"), "title": "From png"}]
     rendered = renderer._render_figures(fig_paths, meta, c)
     assert 'image("state/plot.png")' in rendered
+
+
+def test_sync_notebooks_writes_normal_and_export_modes(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    figures_dir = state_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    renderer = Renderer(figures_dir=figures_dir, state_dir=state_dir)
+
+    cell = Cell(
+        cell_id="c1",
+        index=0,
+        source="print('hello')\n",
+        start=0,
+        end=0,
+        metadata={"keep-subplots": "false"},
+    )
+    result = CellResult(cell_id="c1", stdout="hello\n")
+
+    renderer.sync_notebooks([cell], {"c1": result}, working_dir=tmp_path)
+
+    normal_nb = nbformat.read(state_dir / "notebook.ipynb", as_version=4)
+    export_nb = nbformat.read(state_dir / "notebook_export.ipynb", as_version=4)
+
+    assert len(normal_nb.cells) == 2
+    assert len(export_nb.cells) == 2
+
+    # Check normal setup cell
+    assert 'os.chdir("' in normal_nb.cells[0].source
+    assert "import os" in normal_nb.cells[0].source
+    
+    # Check export setup cell has necessary imports
+    assert 'os.chdir("' in export_nb.cells[0].source
+    assert "import os" in export_nb.cells[0].source
+    assert "import matplotlib.pyplot as plt" in export_nb.cells[0].source
+    assert "save_figures_and_metadata" in export_nb.cells[0].source
+
+    assert normal_nb.cells[1].source == "print('hello')\n"
+    assert normal_nb.cells[1].metadata.get("typst_pyexec_mode") == "normal"
+
+    assert "__typst_pyexec_ctx" in export_nb.cells[1].source
+    assert "print('hello')" in export_nb.cells[1].source
+    assert "save_figures_and_metadata(" in export_nb.cells[1].source
+    assert export_nb.cells[1].metadata.get("typst_pyexec_mode") == "export"
+
+    assert normal_nb.cells[1].outputs[0]["output_type"] == "stream"
+    assert export_nb.cells[1].outputs[0]["output_type"] == "stream"
+
+
+def test_inject_preserves_block_padding_for_source_and_output(tmp_path: Path) -> None:
+    renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
+    source = "Intro\n\n    ```python\n    print('hello')\n    ```\n"
+    cell = Cell(
+        cell_id="c1",
+        index=0,
+        source="print('hello')\n",
+        start=0,
+        end=0,
+        metadata={},
+    )
+    result = CellResult(cell_id="c1", stdout="hello\n")
+
+    injected = renderer.inject(source, [cell], {"c1": result})
+    assert "    ```python" in injected
+    assert "    print(\"hello\")" in injected
+    assert '    #raw("hello")' in injected
