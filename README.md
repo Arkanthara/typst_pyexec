@@ -4,18 +4,21 @@ typst_pyexec is a reactive Python execution engine for Typst documents.
 
 It executes Python fences inside `.typ` files, captures outputs (stdout, figures, tables), and injects rendered Typst markup into an intermediate file (`*.typst_pyexec.typ`) that can be compiled directly.
 
+## Requirements
+
+- Python >= 3.10
+- Typst compiler for `build` and `watch` (default command `typst`)
+- Optional: tinymist for faster live preview (`tinymist preview`)
+
 ## Core Capabilities
 
 - Reactive dependency graph based on Python AST analysis
 - Incremental execution with source-hash cache
-- Reduced duplicate hashing and cache I/O in the execution pipeline
-- Centralized metadata option parsing for consistent behavior across builder, executor, and renderer
-- Persistent Jupyter kernel between builds
-- Automatic cold-kernel hydration for dependency prerequisites
+- Persistent Jupyter kernel between builds with cold-kernel hydration
 - Matplotlib figure export to SVG with PNG fallback
 - Subfigure reconstruction via `figure(grid(...))`
 - DataFrame HTML rendering to Typst `#table(...)`
-- Watch mode with automatic rebuilds and live preview (`tinymist preview` preferred)
+- Watch mode with automatic rebuilds and live preview
 
 ## Installation
 
@@ -57,13 +60,13 @@ typst_pyexec clean
 
 Common options:
 
-- `--output-dir <dir>`: write intermediate/state outputs to a custom folder
-- `--no-cache`: disable cache lookups and force execution
+- `--output-dir <dir>`: write intermediate and state outputs to a custom folder (default: source file directory)
+- `--no-cache`: disable cache reads and writes, and execute all cells
 - `--jobs <n>`: reserved for future multi-kernel scheduling (`-1` default)
-- `--compiler <cmd>`: Typst compiler binary name/path (default `typst`)
+- `--compiler <cmd>`: Typst compiler binary name or path (default `typst`)
 - `watch --preview-engine <auto|tinymist|typst|none>`: select live preview backend
 
-Watch mode behavior:
+### Watch mode behavior
 
 - Watch mode regenerates `*.typst_pyexec.typ` on each save and delegates rendering to a live preview process.
 - `--preview-engine auto` tries `tinymist preview` first (if `tinymist` is on PATH), then falls back to `typst watch`.
@@ -91,7 +94,7 @@ Supported options:
 - `execute` (default `true`): skip execution when `false`
 - `refresh` (default `false`): force this cell to run every build
 - `echo` (default `true`): show or hide source code
-- `raw` (default `true`): show or hide textual runtime output (`stdout`, traceback, `text/plain` display bundles)
+- `raw` (default `true`): show or hide textual runtime output (stdout, tracebacks, `text/plain` bundles)
 - `figure` (default `true`): show or hide rendered figures
 - `caption`: explicit figure caption override
 - `label`: Typst label for cross-references
@@ -99,7 +102,12 @@ Supported options:
 - `img-*`: passthrough kwargs for Typst `image(...)`
 - `fig-*`: passthrough kwargs for Typst `figure(...)`
 - `grid-*`: passthrough kwargs for Typst `grid(...)`
+- `grid-columns`: explicit `columns` value for the grid (overrides inferred default)
 - `plt-*`: per-cell matplotlib `rcParams` overrides (key after `plt-` maps to rcParam name)
+
+Boolean values are case-insensitive and accept: `true/false`, `yes/no`, `on/off`, `1/0`.
+
+`plt-*` values are parsed as JSON first, then Python literals. If parsing fails, the raw string is used.
 
 Default `plt-*` values applied to every executed cell:
 
@@ -107,7 +115,7 @@ Default `plt-*` values applied to every executed cell:
 - `axes.linewidth: 0.6`
 - `grid.linewidth: 0.2`
 - `axes.grid: true`
-- `lines.markersize: 4` (scatter points are ~2x smaller in area than matplotlib default)
+- `lines.markersize: 4` (scatter points are about 2x smaller in area than matplotlib default)
 
 `plt-*` examples:
 
@@ -127,23 +135,16 @@ This means Python code always wins over `%| plt-*`, and `%| plt-*` wins over def
 Behavior notes:
 
 - `cell_id` is internal and generated automatically.
-- Python fences can be indented to fit paragraph/layout context: shared left padding is automatically removed before execution.
+- Python fences can be indented to fit paragraph or layout context; shared left padding is removed before execution.
 - In generated `.typst_pyexec.typ`, that original block padding is preserved for both rendered source and rendered outputs.
 - Option-only edits (including `plt-*`) do not invalidate cache because cache keys are based on Python source.
 - To re-run on option updates, set `refresh: true`.
-- Build logs include `effective plot rcParams` per executed cell for quick verification.
-
-## Refactor Notes
-
-- Shared option parsing lives in `typst_pyexec/utils/options.py`, removing duplicated boolean parsing logic.
-- Executor cache handling now uses one code path to validate and materialize cached results, reducing branching duplication.
-- Release workflow artifact upload now targets the full `dist/` directory and fails clearly if artifacts are missing.
 
 ## Figure and Caption Behavior
 
-- For single-axis plots, title text is promoted into Typst caption when `caption` is not set.
-- For subplot grids, each axis title becomes child caption; suptitle becomes outer caption.
-- Title text is removed from exported images after promotion to captions.
+- For single-axis plots, title or suptitle text is promoted into the Typst caption when `caption` is not set.
+- For subplot grids, each axis title becomes a child caption; suptitle becomes the outer caption.
+- Title and suptitle text are removed from exported images after promotion to captions.
 - If SVG export fails and PNG is emitted, renderer auto-resolves PNG paths in final Typst output.
 
 ## How It Works
@@ -158,9 +159,17 @@ Behavior notes:
 8. Build mode: compile with Typst compiler
 9. Watch mode: refresh intermediate file and stream live preview via `tinymist preview` or `typst watch`
 
+## Caching and Execution Model
+
+- Cache keys are SHA-256 hashes of the Python source for each cell.
+- Cache entries are stored under `.typst_pyexec/cache`.
+- `--no-cache` disables cache reads and writes and forces all executable cells to run.
+- `refresh: true` forces a cell to execute every build but does not cascade to dependents.
+- When a kernel is cold or reconnected, typst_pyexec replays prerequisite cells to rebuild namespace state.
+
 ## Local State
 
-typst_pyexec writes runtime state into `.typst_pyexec/`:
+typst_pyexec writes runtime state into `.typst_pyexec/` inside the output directory:
 
 - `kernel_connection.json`: reconnect data for persistent kernel
 - `cache/`: JSON entries keyed by SHA-256 of cell source
@@ -175,13 +184,10 @@ Two notebooks are intentionally generated:
 - `notebook.ipynb` preserves the authored Python cells and attached outputs exactly as written (minimal overhead).
 - `notebook_export.ipynb` wraps each cell with figure-export helpers that invoke optimized functions.
 
-This split keeps one notebook readable for normal analysis and reproducibility, while the export notebook is designed for generating Typst-integrated figures and results.
+Both notebooks include a setup cell that initializes the environment:
 
-**Standalone Execution**: Both notebooks include a setup cell that initializes the environment:
-- **Normal mode**: Sets working directory for relative path consistency
-- **Export mode**: Sets working directory AND imports matplotlib, pyplot, and the `save_figures_and_metadata` function—enabling the export notebook to execute standalone without additional setup
-
-**Performance**: Both notebooks initialize matplotlib and import optimized figure management routines once per kernel session. This eliminates per-cell code injection overhead compared to earlier versions (~2-3KB per cell reduced to ~500 bytes per cell).
+- Normal mode: sets working directory for relative path consistency
+- Export mode: sets working directory and imports matplotlib plus `save_figures_and_metadata`, enabling the export notebook to execute standalone
 
 ## Development Quality Gates
 

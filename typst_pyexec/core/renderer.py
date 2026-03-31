@@ -273,7 +273,7 @@ class Renderer:
         label = cell.metadata.get("label", "")
         img_args = _passthrough_args(cell, "img-")
         fig_args = _passthrough_args(cell, "fig-")
-        grid_args = _passthrough_args(cell, "grid-")
+        grid_args = _passthrough_args(cell, "grid-", skip_keys={"columns"})
 
         if len(rel_paths) == 1:
             image_call = _image_call(rel_paths[0], img_args)
@@ -380,11 +380,20 @@ def _format_python_source(source: str) -> str:
         return code
 
 
-def _passthrough_args(cell: Cell, prefix: str) -> list[str]:
+def _passthrough_args(
+    cell: Cell,
+    prefix: str,
+    *,
+    skip_keys: set[str] | None = None,
+) -> list[str]:
     args: list[str] = []
     for key, value in cell.metadata.items():
-        if key.startswith(prefix) and value:
-            args.append(f"{key[len(prefix):]}: {value}")
+        if not key.startswith(prefix) or not value:
+            continue
+        arg_key = key[len(prefix) :]
+        if skip_keys and arg_key in skip_keys:
+            continue
+        args.append(f"{arg_key}: {value}")
     return args
 
 

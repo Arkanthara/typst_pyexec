@@ -98,7 +98,7 @@ class Builder:
 
             self._dag.build(cells)
             groups = self._scheduler.schedule(self._dag)
-            cell_hashes = self._compute_cell_hashes(cells)
+            cell_hashes = self._compute_cell_hashes(cells) if self.use_cache else None
 
             executor = Executor(
                 kernel=self._kernel,
@@ -108,12 +108,21 @@ class Builder:
                 n_jobs=self.n_jobs,
             )
 
-            changed_ids = self._detect_changed_cells(cells, cell_hashes)
+            executable_ids = {
+                c.cell_id
+                for c in cells
+                if parse_bool(c.metadata.get("execute"), True)
+            }
+            if self.use_cache:
+                changed_ids = self._detect_changed_cells(cells, cell_hashes)
+            else:
+                changed_ids = set(executable_ids)
+
             refresh_ids = {
                 c.cell_id
                 for c in cells
-                if parse_bool(c.metadata.get("refresh"), False)
-                and parse_bool(c.metadata.get("execute"), True)
+                if c.cell_id in executable_ids
+                and parse_bool(c.metadata.get("refresh"), False)
             }
             # Regular changes cascade through DAG; refresh-only cells re-run
             # without cascading to downstream dependents.
@@ -129,7 +138,12 @@ class Builder:
             if refresh_ids:
                 logger.info("Refresh-forced cells: %s", ", ".join(sorted(refresh_ids)))
             logger.info("%d/%d cells need execution", len(cells_to_run), len(cells))
-            if not cells_to_run and cells:
+            if not self.use_cache:
+                logger.info(
+                    "Cache disabled; executing all %d executable cell(s).",
+                    len(executable_ids),
+                )
+            elif not cells_to_run and cells:
                 logger.info(
                     "No Python source hash changed; all executable cells are cache hits. "
                     "If you expected re-execution, ensure the code content changed or set %%| refresh: true on that cell."

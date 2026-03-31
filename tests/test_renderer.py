@@ -114,6 +114,30 @@ def test_render_figures_subplots_with_suptitle_and_child_captions(
     assert "$phi_1$" in rendered
 
 
+def test_render_figures_grid_columns_override(tmp_path: Path) -> None:
+    renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
+    c = _cell({"grid-columns": "3", "grid-align": "center"})
+    fig_paths = [
+        str(tmp_path / "state" / "img_1.svg"),
+        str(tmp_path / "state" / "img_2.svg"),
+    ]
+
+    rendered = renderer._render_figures(fig_paths, [], c)
+    assert rendered.count("columns: 3") == 1
+    assert "align: center" in rendered
+
+
+def test_render_figures_promotes_title_to_caption_when_missing(tmp_path: Path) -> None:
+    renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
+    c = _cell({})
+    fig_paths = [str(tmp_path / "state" / "plot.svg")]
+    meta = [{"path": fig_paths[0], "title": "My Figure Title"}]
+
+    rendered = renderer._render_figures(fig_paths, meta, c)
+    assert "#figure(" in rendered
+    assert "caption: [My Figure Title]" in rendered
+
+
 def test_render_cell_raw_false_hides_stdout(tmp_path: Path) -> None:
     renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
     c = _cell({"echo": "false", "raw": "false"})

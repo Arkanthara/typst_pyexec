@@ -106,8 +106,9 @@ class KernelManager:
             init_code = (
                 "import os\n"
                 "import matplotlib\n"
-                "import matplotlib.pyplot as plt\n"
                 "matplotlib.use('Agg')\n"
+                "import matplotlib.pyplot as plt\n"
+                "plt.ioff()\n"
                 "from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata\n"
             )
             result = self.execute(init_code)

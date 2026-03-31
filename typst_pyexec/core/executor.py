@@ -8,7 +8,7 @@ import json
 import logging
 from pathlib import Path
 
-from typst_pyexec.core.cache import CacheStore
+from typst_pyexec.core.cache import CACHE_SCHEMA_VERSION, CacheStore
 from typst_pyexec.core.dag import DependencyGraph
 from typst_pyexec.core.kernel import KernelManager
 from typst_pyexec.core.parser import Cell
@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 _FIGURE_SENTINEL_PREFIX = "__typst_pyexec_FIGURE__:"
 _FIGMETA_SENTINEL_PREFIX = "__typst_pyexec_FIGMETA__:"
-_CACHE_SCHEMA_VERSION = 2
 _DEFAULT_PLOT_OPTIONS: dict[str, object] = {
     "lines.linewidth": 0.8,
     "axes.linewidth": 0.6,
@@ -185,7 +184,11 @@ class Executor:
             cid: cell_option_bool(cell, "execute", True)
             for cid, cell in cell_map.items()
         }
-        hash_by_id = self._build_hash_map(cells, execute_enabled, cell_hashes)
+        hash_by_id = (
+            self._build_hash_map(cells, execute_enabled, cell_hashes)
+            if self._cache is not None
+            else {}
+        )
         cache_entries: dict[str, dict | None] = {}
 
         # Fast path: all outputs are cache hits, no kernel startup needed.
@@ -585,7 +588,7 @@ def _merge_kernel_results(primary: dict, secondary: dict) -> dict:
 
 def _is_stale_cache_entry(entry: dict) -> bool:
     """Return True when cache entry is from an older schema or shape."""
-    if int(entry.get("schema_version", 0) or 0) < _CACHE_SCHEMA_VERSION:
+    if int(entry.get("schema_version", 0) or 0) < CACHE_SCHEMA_VERSION:
         return True
 
     # Never serve a previously-errored cell from cache: the error may have

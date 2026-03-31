@@ -10,7 +10,7 @@ from typst_pyexec.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 2
 
 
 class CacheStore:
@@ -78,7 +78,7 @@ class CacheStore:
         """Persist *result* for *cell_id* with *source*'s hash as key."""
         h = sha256_text(source)
         entry: dict = {
-            "schema_version": _CACHE_SCHEMA_VERSION,
+            "schema_version": CACHE_SCHEMA_VERSION,
             "hash": h,
             "cell_id": cell_id,
             "stdout": result.get("stdout", ""),
