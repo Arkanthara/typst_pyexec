@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import io
 import sys
-
-import pandas as pd
 from collections.abc import Generator
 from contextlib import contextmanager
+
+import pandas as pd
 
 
 @contextmanager
