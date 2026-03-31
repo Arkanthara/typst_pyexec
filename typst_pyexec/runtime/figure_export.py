@@ -45,7 +45,9 @@ class CellFigureContext:
         Set of matplotlib figure numbers that existed before cell execution
     """
 
-    def __init__(self, cell_id: str, figures_dir: str, keep_subplots: bool = False) -> None:
+    def __init__(
+        self, cell_id: str, figures_dir: str, keep_subplots: bool = False
+    ) -> None:
         """Initialize cell figure context.
 
         Parameters
@@ -237,7 +239,9 @@ def _figure_meta(
     }
 
 
-def _save_full_figure(fig, fig_num: int, suptitle: str, context: CellFigureContext) -> None:
+def _save_full_figure(
+    fig, fig_num: int, suptitle: str, context: CellFigureContext
+) -> None:
     stem = context.generate_stem(fig_num)
     fig_title = _get_axis_title(fig.axes[0]) if fig.axes else ""
 
@@ -262,7 +266,9 @@ def _save_full_figure(fig, fig_num: int, suptitle: str, context: CellFigureConte
     _emit_figure(path, meta)
 
 
-def _save_subplots(fig, fig_num: int, suptitle: str, context: CellFigureContext) -> None:
+def _save_subplots(
+    fig, fig_num: int, suptitle: str, context: CellFigureContext
+) -> None:
     _clear_suptitle(fig)
 
     for ax_i, ax in enumerate(fig.axes, start=1):

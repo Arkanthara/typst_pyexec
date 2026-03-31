@@ -16,7 +16,9 @@ class _DummyFigure:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         if format == "svg":
-            p.write_text('<svg xmlns="http://www.w3.org/2000/svg"></svg>', encoding="utf-8")
+            p.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg"></svg>', encoding="utf-8"
+            )
         else:
             p.write_bytes(b"PNG")
 

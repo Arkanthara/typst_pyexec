@@ -98,7 +98,7 @@ class KernelManager:
 
     def initialize_runtime(self) -> None:
         """Run one-time initialization code in the kernel.
-        
+
         Sets up matplotlib and imports the figure export module.
         """
         self.ensure_running()

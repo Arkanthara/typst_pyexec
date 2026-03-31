@@ -109,9 +109,7 @@ class Builder:
             )
 
             executable_ids = {
-                c.cell_id
-                for c in cells
-                if parse_bool(c.metadata.get("execute"), True)
+                c.cell_id for c in cells if parse_bool(c.metadata.get("execute"), True)
             }
             if self.use_cache:
                 changed_ids = self._detect_changed_cells(cells, cell_hashes)
@@ -129,7 +127,9 @@ class Builder:
             affected_ids = self._dag.affected(changed_ids)
             cells_to_run = affected_ids | refresh_ids
             if changed_ids:
-                logger.info("Changed executable cells: %s", ", ".join(sorted(changed_ids)))
+                logger.info(
+                    "Changed executable cells: %s", ", ".join(sorted(changed_ids))
+                )
             if affected_ids and affected_ids != changed_ids:
                 logger.info(
                     "Dependent cells scheduled due to DAG: %s",
@@ -162,7 +162,9 @@ class Builder:
             self._intermediate.write_text(output_text, encoding="utf-8")
 
             # Persist notebooks for both normal replay and figure-export replay.
-            self._renderer.sync_notebooks(cells, results, working_dir=self.source.parent)
+            self._renderer.sync_notebooks(
+                cells, results, working_dir=self.source.parent
+            )
 
             elapsed = (time.perf_counter() - t0) * 1000
             logger.info("Build finished in %.1f ms", elapsed)
@@ -339,7 +341,8 @@ class Builder:
             process = subprocess.Popen(cmd, cwd=str(self.output_dir), text=True)
         except FileNotFoundError:
             logger.warning(
-                "Preview command not found (%r). Continuing without live preview.", cmd[0]
+                "Preview command not found (%r). Continuing without live preview.",
+                cmd[0],
             )
             return None
 
@@ -379,6 +382,7 @@ class Builder:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+
 
 @contextmanager
 def _pushd(path: Path):

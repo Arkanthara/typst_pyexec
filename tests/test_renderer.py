@@ -208,7 +208,7 @@ def test_sync_notebooks_writes_normal_and_export_modes(tmp_path: Path) -> None:
     # Check normal setup cell
     assert 'os.chdir("' in normal_nb.cells[0].source
     assert "import os" in normal_nb.cells[0].source
-    
+
     # Check export setup cell has necessary imports
     assert 'os.chdir("' in export_nb.cells[0].source
     assert "import os" in export_nb.cells[0].source
@@ -242,5 +242,5 @@ def test_inject_preserves_block_padding_for_source_and_output(tmp_path: Path) ->
 
     injected = renderer.inject(source, [cell], {"c1": result})
     assert "    ```python" in injected
-    assert "    print(\"hello\")" in injected
+    assert '    print("hello")' in injected
     assert '    #raw("hello")' in injected

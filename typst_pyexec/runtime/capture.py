@@ -29,7 +29,7 @@ def capture_stdout() -> Generator[io.StringIO, None, None]:
         sys.stdout = old
 
 
-def dataframe_to_typst(df: pd.DataFrame) -> str:  # type: ignore[name-defined]  # noqa: F821
+def dataframe_to_typst(df: pd.DataFrame) -> str:
     """Convert a pandas DataFrame to a Typst ``#table(…)`` expression.
 
     Parameters

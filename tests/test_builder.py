@@ -152,7 +152,10 @@ def test_resolve_preview_command_prefers_tinymist_when_available(
     source.write_text("= t\n", encoding="utf-8")
     builder = Builder(source=source, output_dir=tmp_path)
 
-    monkeypatch.setattr("typst_pyexec.builder.shutil.which", lambda name: "tm" if name == "tinymist" else None)
+    monkeypatch.setattr(
+        "typst_pyexec.builder.shutil.which",
+        lambda name: "tm" if name == "tinymist" else None,
+    )
 
     cmd = builder._resolve_preview_command("auto")
     assert cmd == ["tinymist", "preview", str(builder._intermediate)]
@@ -180,7 +183,9 @@ def test_resolve_preview_command_none_disables_preview(tmp_path: Path) -> None:
     assert cmd is None
 
 
-def test_dag_affected_cells_include_dependents_for_report_like_case(tmp_path: Path) -> None:
+def test_dag_affected_cells_include_dependents_for_report_like_case(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "doc.typ"
     source.write_text(
         """```python
@@ -229,7 +234,10 @@ def test_start_preview_falls_back_when_tinymist_exits_immediately(
 
     monkeypatch.setattr("typst_pyexec.builder.subprocess.Popen", _fake_popen)
     monkeypatch.setattr("typst_pyexec.builder.time.sleep", lambda _x: None)
-    monkeypatch.setattr("typst_pyexec.builder.shutil.which", lambda name: "tm" if name == "tinymist" else None)
+    monkeypatch.setattr(
+        "typst_pyexec.builder.shutil.which",
+        lambda name: "tm" if name == "tinymist" else None,
+    )
 
     proc = builder._start_preview("auto")
     assert proc is not None

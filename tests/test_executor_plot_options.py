@@ -12,7 +12,9 @@ from typst_pyexec.core.parser import Cell
 
 
 def _cell(metadata: dict[str, str]) -> Cell:
-    return Cell(cell_id="c1", index=0, source="print('x')\n", start=0, end=1, metadata=metadata)
+    return Cell(
+        cell_id="c1", index=0, source="print('x')\n", start=0, end=1, metadata=metadata
+    )
 
 
 def test_parse_plot_option_value_primitives() -> None:

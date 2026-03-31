@@ -245,8 +245,7 @@ class Executor:
             missing_namespace_ids = {
                 cid
                 for cid in required_predecessors
-                if execute_enabled.get(cid, True)
-                and cid not in self._executed_cells
+                if execute_enabled.get(cid, True) and cid not in self._executed_cells
             }
             if missing_namespace_ids:
                 effective_to_run |= missing_namespace_ids
