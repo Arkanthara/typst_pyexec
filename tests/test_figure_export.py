@@ -213,12 +213,18 @@ def test_keep_colorbar_toggle_hides_colorbar_axes_during_export(
     observed: list[bool] = []
 
     def fake_save_transparent(fig, stem, figures_dir, bbox, png_dpi=150):
-        observed.extend(ax.get_visible() for ax in fig.axes if ax.get_label() == "<colorbar>")
+        observed.extend(
+            ax.get_visible() for ax in fig.axes if ax.get_label() == "<colorbar>"
+        )
         out = Path(figures_dir) / f"{stem}.svg"
-        out.write_text("<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8")
+        out.write_text(
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8"
+        )
         return str(out)
 
-    monkeypatch.setattr("typst_pyexec.runtime.figure_export._save_transparent", fake_save_transparent)
+    monkeypatch.setattr(
+        "typst_pyexec.runtime.figure_export._save_transparent", fake_save_transparent
+    )
 
     save_figures_and_metadata(ctx)
 

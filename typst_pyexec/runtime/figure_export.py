@@ -354,7 +354,9 @@ def _save_subplots(
     for ax_i, ax in enumerate(data_axes, start=1):
         stem = context.generate_stem(fig_num, ax_i)
         title = _get_axis_title(ax)
-        related_axes = _related_axes_for_subplot(fig, ax, keep_colorbar=context.keep_colorbar)
+        related_axes = _related_axes_for_subplot(
+            fig, ax, keep_colorbar=context.keep_colorbar
+        )
 
         layout_state = _capture_layout_state(fig)
         for other_ax in fig.axes:

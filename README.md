@@ -64,6 +64,9 @@ Common options:
 - `--no-cache`: disable cache reads and writes, and execute all cells
 - `--jobs <n>`: reserved for future multi-kernel scheduling (`-1` default)
 - `--compiler <cmd>`: Typst compiler binary name or path (default `typst`)
+- `--typst-arg <arg>`: pass an argument to both Typst `compile` and Typst `watch` (repeatable)
+- `--typst-compile-arg <arg>`: pass an argument only to Typst `compile` (repeatable)
+- `--typst-watch-arg <arg>`: pass an argument only to Typst `watch` (repeatable)
 - `watch --preview-engine <auto|tinymist|typst|none>`: select live preview backend
 
 ### Watch mode behavior
@@ -73,6 +76,14 @@ Common options:
 - `--preview-engine tinymist` prefers `tinymist preview`; if `tinymist` is unavailable it falls back to `typst watch`.
 - `--preview-engine typst` always runs `typst watch`.
 - `--preview-engine none` disables live preview and only refreshes the intermediate file.
+- Any `--typst-watch-arg` values are applied to `typst watch` (including fallback from `tinymist` to `typst watch`).
+
+Examples:
+
+```bash
+typst_pyexec build report.typ --typst-compile-arg --root --typst-compile-arg .
+typst_pyexec watch report.typ --preview-engine typst --typst-watch-arg --root --typst-watch-arg .
+```
 
 ## Block Options (`%|`)
 

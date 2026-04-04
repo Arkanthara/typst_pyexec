@@ -54,12 +54,16 @@ class Builder:
         use_cache: bool = True,
         n_jobs: int = -1,
         compiler: str = "typst",
+        typst_compile_args: list[str] | None = None,
+        typst_watch_args: list[str] | None = None,
     ) -> None:
         self.source = source.resolve()
         self.output_dir = (output_dir or self.source.parent).resolve()
         self.use_cache = use_cache
         self.n_jobs = n_jobs
         self.compiler = compiler
+        self.typst_compile_args = list(typst_compile_args or [])
+        self.typst_watch_args = list(typst_watch_args or [])
 
         self._state_dir = self.output_dir / ".typst_pyexec"
         self._figures_dir = self._state_dir / "figures"
@@ -289,7 +293,12 @@ class Builder:
 
     def _compile(self) -> None:
         """Invoke the Typst compiler on the intermediate document."""
-        cmd = [self.compiler, "compile", str(self._intermediate)]
+        cmd = [
+            self.compiler,
+            "compile",
+            *self.typst_compile_args,
+            str(self._intermediate),
+        ]
         logger.info("Running: %s", " ".join(cmd))
         try:
             result = subprocess.run(
@@ -325,7 +334,12 @@ class Builder:
                 "tinymist requested but not found on PATH; falling back to typst watch."
             )
 
-        return [self.compiler, "watch", str(self._intermediate)]
+        return [
+            self.compiler,
+            "watch",
+            *self.typst_watch_args,
+            str(self._intermediate),
+        ]
 
     def _start_preview(
         self,
@@ -356,7 +370,12 @@ class Builder:
                     "tinymist preview exited immediately (code=%s). Falling back to typst watch.",
                     returncode,
                 )
-                fallback = [self.compiler, "watch", str(self._intermediate)]
+                fallback = [
+                    self.compiler,
+                    "watch",
+                    *self.typst_watch_args,
+                    str(self._intermediate),
+                ]
                 logger.info("Starting live preview fallback: %s", " ".join(fallback))
                 try:
                     return subprocess.Popen(

@@ -253,3 +253,100 @@ def test_start_preview_returns_none_when_preview_disabled(tmp_path: Path) -> Non
 
     proc = builder._start_preview("none")
     assert proc is None
+
+
+def test_resolve_preview_command_includes_watch_args(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "doc.typ"
+    source.write_text("= t\n", encoding="utf-8")
+    builder = Builder(
+        source=source,
+        output_dir=tmp_path,
+        compiler="typst",
+        typst_watch_args=["--root", str(tmp_path)],
+    )
+
+    monkeypatch.setattr("typst_pyexec.builder.shutil.which", lambda _name: None)
+
+    cmd = builder._resolve_preview_command("typst")
+    assert cmd == [
+        "typst",
+        "watch",
+        "--root",
+        str(tmp_path),
+        str(builder._intermediate),
+    ]
+
+
+def test_start_preview_fallback_keeps_watch_args(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "doc.typ"
+    source.write_text("= t\n", encoding="utf-8")
+    builder = Builder(
+        source=source,
+        output_dir=tmp_path,
+        compiler="typst",
+        typst_watch_args=["--root", str(tmp_path)],
+    )
+
+    class _Proc:
+        def __init__(self, returncode):
+            self._returncode = returncode
+
+        def poll(self):
+            return self._returncode
+
+    calls: list[list[str]] = []
+
+    def _fake_popen(cmd, cwd=None, **_kwargs):
+        calls.append(cmd)
+        if cmd[0] == "tinymist":
+            return _Proc(returncode=1)
+        return _Proc(returncode=None)
+
+    monkeypatch.setattr("typst_pyexec.builder.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("typst_pyexec.builder.time.sleep", lambda _x: None)
+    monkeypatch.setattr(
+        "typst_pyexec.builder.shutil.which",
+        lambda name: "tm" if name == "tinymist" else None,
+    )
+
+    proc = builder._start_preview("auto")
+    assert proc is not None
+    assert calls[1] == [
+        "typst",
+        "watch",
+        "--root",
+        str(tmp_path),
+        str(builder._intermediate),
+    ]
+
+
+def test_compile_includes_compile_args(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "doc.typ"
+    source.write_text("= t\n", encoding="utf-8")
+    builder = Builder(
+        source=source,
+        output_dir=tmp_path,
+        compiler="typst",
+        typst_compile_args=["--root", str(tmp_path)],
+    )
+
+    commands: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def _fake_run(cmd, capture_output, text, timeout):
+        commands.append(cmd)
+        return _Result()
+
+    monkeypatch.setattr("typst_pyexec.builder.subprocess.run", _fake_run)
+
+    builder._compile()
+
+    assert commands == [
+        ["typst", "compile", "--root", str(tmp_path), str(builder._intermediate)]
+    ]

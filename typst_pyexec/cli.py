@@ -12,23 +12,29 @@ from typst_pyexec.utils.logging import configure_logging
 
 
 def _build_command(args: argparse.Namespace) -> None:
+    compile_args = [*args.typst_arg, *args.typst_compile_arg]
     builder = Builder(
         source=Path(args.file),
         output_dir=Path(args.output_dir) if args.output_dir else None,
         use_cache=not args.no_cache,
         n_jobs=args.jobs,
         compiler=args.compiler,
+        typst_compile_args=compile_args,
     )
     builder.build()
 
 
 def _watch_command(args: argparse.Namespace) -> None:
+    compile_args = [*args.typst_arg, *args.typst_compile_arg]
+    watch_args = [*args.typst_arg, *args.typst_watch_arg]
     builder = Builder(
         source=Path(args.file),
         output_dir=Path(args.output_dir) if args.output_dir else None,
         use_cache=not args.no_cache,
         n_jobs=args.jobs,
         compiler=args.compiler,
+        typst_compile_args=compile_args,
+        typst_watch_args=watch_args,
     )
     builder.watch(preview_engine=args.preview_engine)
 
@@ -108,6 +114,33 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
         "--compiler",
         default="typst",
         help="Typst compiler command (default: typst)",
+    )
+    p.add_argument(
+        "--typst-arg",
+        action="append",
+        default=[],
+        help=(
+            "Typst argument passed to both compile and watch commands. "
+            "Repeat for multiple values."
+        ),
+    )
+    p.add_argument(
+        "--typst-compile-arg",
+        action="append",
+        default=[],
+        help=(
+            "Typst argument passed only to compile commands. "
+            "Repeat for multiple values."
+        ),
+    )
+    p.add_argument(
+        "--typst-watch-arg",
+        action="append",
+        default=[],
+        help=(
+            "Typst argument passed only to watch commands. "
+            "Repeat for multiple values."
+        ),
     )
 
 
