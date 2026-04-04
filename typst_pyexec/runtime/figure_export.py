@@ -10,6 +10,7 @@ import uuid
 
 import matplotlib.pyplot as plt
 import matplotlib.transforms as mpl_transforms
+from matplotlib.figure import Figure
 
 __all__ = [
     "setup_figure_tracking",
@@ -25,6 +26,11 @@ _PAD_TOP_IN = 0.20
 
 _FIGURE_SENTINEL = "__typst_pyexec_FIGURE__:"
 _FIGMETA_SENTINEL = "__typst_pyexec_FIGMETA__:"
+
+_ACTIVE_CONTEXT = None
+_SHOW_HOOKS_INSTALLED = False
+_ORIGINAL_PYPLOT_SHOW = None
+_ORIGINAL_FIGURE_SHOW = None
 
 
 class CellFigureContext:
@@ -63,6 +69,12 @@ class CellFigureContext:
         self.figures_dir = str(figures_dir)
         self.keep_subplots = keep_subplots
         self.figs_before = set(plt.get_fignums())
+        self._shown_figs: list[int] = []
+        self._shown_figs_set: set[int] = set()
+
+        # Ensure show hooks are active before user code executes.
+        setup_figure_tracking()
+        _set_active_context(self)
 
     def generate_stem(self, fig_num: int, ax_i: int | None = None) -> str:
         """Generate a filename stem for a figure.
@@ -93,10 +105,53 @@ class CellFigureContext:
         """
         return [n for n in plt.get_fignums() if n not in self.figs_before]
 
+    def mark_shown(self, fig_nums: list[int]) -> None:
+        for fig_num in fig_nums:
+            if not isinstance(fig_num, int) or fig_num in self._shown_figs_set:
+                continue
+            self._shown_figs.append(fig_num)
+            self._shown_figs_set.add(fig_num)
+
+    def shown_figure_numbers(self) -> list[int]:
+        return [n for n in self._shown_figs if n not in self.figs_before]
+
 
 def setup_figure_tracking() -> None:
-    """Disable interactive mode for headless figure rendering."""
+    """Disable interactive mode and hook matplotlib show calls."""
+    global _SHOW_HOOKS_INSTALLED, _ORIGINAL_PYPLOT_SHOW, _ORIGINAL_FIGURE_SHOW
+
     plt.ioff()
+    if _SHOW_HOOKS_INSTALLED:
+        return
+
+    _ORIGINAL_PYPLOT_SHOW = plt.show
+    plt.show = _patched_pyplot_show
+    _ORIGINAL_FIGURE_SHOW = Figure.show
+    Figure.show = _patched_figure_show  # type: ignore[method-assign]
+    _SHOW_HOOKS_INSTALLED = True
+
+
+def _set_active_context(context: CellFigureContext | None) -> None:
+    global _ACTIVE_CONTEXT
+    _ACTIVE_CONTEXT = context
+
+
+def _patched_pyplot_show(*args, **kwargs):
+    if _ACTIVE_CONTEXT is not None:
+        _ACTIVE_CONTEXT.mark_shown(list(plt.get_fignums()))
+    if _ORIGINAL_PYPLOT_SHOW is None:
+        return None
+    return _ORIGINAL_PYPLOT_SHOW(*args, **kwargs)
+
+
+def _patched_figure_show(self, *args, **kwargs):
+    if _ACTIVE_CONTEXT is not None:
+        fig_num = getattr(self, "number", None)
+        if isinstance(fig_num, int):
+            _ACTIVE_CONTEXT.mark_shown([fig_num])
+    if _ORIGINAL_FIGURE_SHOW is None:
+        return None
+    return _ORIGINAL_FIGURE_SHOW(self, *args, **kwargs)
 
 
 def _get_axis_title(ax):
@@ -178,19 +233,26 @@ def save_figures_and_metadata(context: CellFigureContext) -> None:
     context : CellFigureContext
         Figure tracking context with cell_id, figures_dir, and settings
     """
-    for fig_num in context.new_figure_numbers():
-        fig = plt.figure(fig_num)
-        suptitle = _get_suptitle(fig)
+    new_fig_nums = context.new_figure_numbers()
+    shown_fig_nums = [n for n in context.shown_figure_numbers() if n in new_fig_nums]
 
-        if _should_split_subplots(fig, context.keep_subplots):
-            try:
-                _save_subplots(fig, fig_num, suptitle, context)
-            except Exception:
+    try:
+        for fig_num in shown_fig_nums:
+            fig = plt.figure(fig_num)
+            suptitle = _get_suptitle(fig)
+
+            if _should_split_subplots(fig, context.keep_subplots):
+                try:
+                    _save_subplots(fig, fig_num, suptitle, context)
+                except Exception:
+                    _save_full_figure(fig, fig_num, suptitle, context)
+            else:
                 _save_full_figure(fig, fig_num, suptitle, context)
-        else:
-            _save_full_figure(fig, fig_num, suptitle, context)
-
-        plt.close(fig)
+    finally:
+        for fig_num in new_fig_nums:
+            plt.close(fig_num)
+        if _ACTIVE_CONTEXT is context:
+            _set_active_context(None)
 
 
 def _should_split_subplots(fig, keep_subplots: bool) -> bool:
@@ -243,9 +305,10 @@ def _save_full_figure(
     fig, fig_num: int, suptitle: str, context: CellFigureContext
 ) -> None:
     stem = context.generate_stem(fig_num)
-    fig_title = _get_axis_title(fig.axes[0]) if fig.axes else ""
+    promote_axis_title = len(fig.axes) == 1
+    fig_title = _get_axis_title(fig.axes[0]) if promote_axis_title and fig.axes else ""
 
-    if fig_title:
+    if promote_axis_title and fig_title:
         _clear_axis_title(fig.axes[0])
     _clear_suptitle(fig)
     fig.canvas.draw()

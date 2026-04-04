@@ -214,6 +214,7 @@ def test_sync_notebooks_writes_normal_and_export_modes(tmp_path: Path) -> None:
     assert "import os" in export_nb.cells[0].source
     assert "import matplotlib.pyplot as plt" in export_nb.cells[0].source
     assert "save_figures_and_metadata" in export_nb.cells[0].source
+    assert "setup_figure_tracking()" in export_nb.cells[0].source
 
     assert normal_nb.cells[1].source == "print('hello')\n"
     assert normal_nb.cells[1].metadata.get("typst_pyexec_mode") == "normal"

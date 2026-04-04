@@ -109,7 +109,8 @@ class KernelManager:
                 "matplotlib.use('Agg')\n"
                 "import matplotlib.pyplot as plt\n"
                 "plt.ioff()\n"
-                "from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata\n"
+                "from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata, setup_figure_tracking\n"
+                "setup_figure_tracking()\n"
             )
             result = self.execute(init_code)
             if result.get("status") == "error":

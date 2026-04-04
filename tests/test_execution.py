@@ -140,6 +140,19 @@ def test_matplotlib_figure_saved(executor, kernel_state_dir):
 
 
 @pytest.mark.skipif(SKIP, reason="Kernel tests disabled")
+def test_matplotlib_figure_not_saved_without_show(executor, kernel_state_dir):
+    code = (
+        "import matplotlib\nmatplotlib.use('Agg')\n"
+        "import matplotlib.pyplot as plt\n"
+        "plt.plot([1,2,3],[1,4,9])\n"
+    )
+    cells = [_make_cell("fig_cell_no_show", code)]
+    results = _run_cells(executor, cells)
+    r = results["fig_cell_no_show"]
+    assert len(r.figures) == 0
+
+
+@pytest.mark.skipif(SKIP, reason="Kernel tests disabled")
 def test_reactive_only_affected_cells_rerun(executor, kernel_state_dir):
     """Changing cell_1 should mark cell_2 (dependent) for re-run but not cell_3."""
     code_a = "x = 10"

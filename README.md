@@ -142,9 +142,11 @@ Behavior notes:
 
 ## Figure and Caption Behavior
 
+- Matplotlib figures are exported only when explicitly shown (`plt.show()` or `fig.show()`).
 - For single-axis plots, title or suptitle text is promoted into the Typst caption when `caption` is not set.
 - For subplot grids, each axis title becomes a child caption; suptitle becomes the outer caption.
-- Title and suptitle text are removed from exported images after promotion to captions.
+- With `keep-subplots: true`, multi-axis figures are kept as one image and subplot titles remain inside the image (the first subplot title is not promoted to caption).
+- Title and suptitle text are removed from exported images only when they are promoted to captions.
 - If SVG export fails and PNG is emitted, renderer auto-resolves PNG paths in final Typst output.
 
 ## How It Works

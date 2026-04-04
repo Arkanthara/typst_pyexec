@@ -10,7 +10,7 @@ from typst_pyexec.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 
 
 class CacheStore:

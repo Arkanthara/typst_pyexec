@@ -574,7 +574,8 @@ def _export_notebook_setup_source(working_dir: Path) -> str:
     return (
         "import os\n"
         "import matplotlib.pyplot as plt\n"
-        "from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata\n"
+        "from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata, setup_figure_tracking\n"
+        "setup_figure_tracking()\n"
         f'os.chdir("{safe_dir}")\n'
         f'print("typst_pyexec working directory: {safe_dir}")\n'
     )
