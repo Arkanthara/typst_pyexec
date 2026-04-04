@@ -99,6 +99,7 @@ Supported options:
 - `caption`: explicit figure caption override
 - `label`: Typst label for cross-references
 - `keep-subplots` (default `false`): preserve multi-axis plot as one image
+- `subfigure-caption-position` (`top` or `bottom`): position subfigure captions for subplot grids
 - `img-*`: passthrough kwargs for Typst `image(...)`
 - `fig-*`: passthrough kwargs for Typst `figure(...)`
 - `grid-*`: passthrough kwargs for Typst `grid(...)`
@@ -145,6 +146,7 @@ Behavior notes:
 - Matplotlib figures are exported only when explicitly shown (`plt.show()` or `fig.show()`).
 - For single-axis plots, title or suptitle text is promoted into the Typst caption when `caption` is not set.
 - For subplot grids, each axis title becomes a child caption; suptitle becomes the outer caption.
+- Use `%| subfigure-caption-position: top` to place subplot captions above each subplot image.
 - With `keep-subplots: true`, multi-axis figures are kept as one image and subplot titles remain inside the image (the first subplot title is not promoted to caption).
 - Title and suptitle text are removed from exported images only when they are promoted to captions.
 - If SVG export fails and PNG is emitted, renderer auto-resolves PNG paths in final Typst output.

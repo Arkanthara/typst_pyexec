@@ -314,7 +314,16 @@ class Renderer:
         outer_named.extend(fig_args)
         outer_args = ", ".join([grid_call] + outer_named)
         label_markup = f" <{label}>" if label else ""
-        return f"#figure({outer_args}){label_markup}\n"
+        figure_call = f"figure({outer_args}){label_markup}"
+
+        subfig_caption_position = _subfigure_caption_position(cell)
+        if subfig_caption_position is not None:
+            return _with_subfigure_caption_position(
+                figure_call,
+                subfig_caption_position,
+            )
+
+        return f"#{figure_call}\n"
 
     def _check_subfigures(
         self, cells: list[Cell], results: dict[str, CellResult]
@@ -470,6 +479,22 @@ def _typst_multiline(text: str) -> str:
     if len(lines) <= 1:
         return text
     return " #linebreak() ".join(lines)
+
+
+def _subfigure_caption_position(cell: Cell) -> str | None:
+    raw = str(cell.metadata.get("subfigure-caption-position", "")).strip().lower()
+    if raw in {"top", "bottom"}:
+        return raw
+    return None
+
+
+def _with_subfigure_caption_position(figure_call: str, position: str) -> str:
+    return (
+        "#{\n"
+        f'  show figure.where(kind: "subfigure"): set figure.caption(position: {position})\n'
+        f"  {figure_call}\n"
+        "}\n"
+    )
 
 
 def _alpha_suffix(idx: int) -> str:

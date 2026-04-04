@@ -127,6 +127,39 @@ def test_render_figures_grid_columns_override(tmp_path: Path) -> None:
     assert "align: center" in rendered
 
 
+def test_render_figures_subfigure_caption_position_top(tmp_path: Path) -> None:
+    renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
+    c = _cell({"subfigure-caption-position": "top"})
+    fig_paths = [
+        str(tmp_path / "state" / "img_1.svg"),
+        str(tmp_path / "state" / "img_2.svg"),
+    ]
+    meta = [
+        {"path": fig_paths[0], "title": "A", "row": 0, "col": 0, "rows": 1, "cols": 2},
+        {"path": fig_paths[1], "title": "B", "row": 0, "col": 1, "rows": 1, "cols": 2},
+    ]
+
+    rendered = renderer._render_figures(fig_paths, meta, c)
+    assert (
+        'show figure.where(kind: "subfigure"): set figure.caption(position: top)'
+        in rendered
+    )
+
+
+def test_render_figures_subfigure_caption_position_invalid_ignored(
+    tmp_path: Path,
+) -> None:
+    renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
+    c = _cell({"subfigure-caption-position": "left"})
+    fig_paths = [
+        str(tmp_path / "state" / "img_1.svg"),
+        str(tmp_path / "state" / "img_2.svg"),
+    ]
+
+    rendered = renderer._render_figures(fig_paths, [], c)
+    assert "position: left" not in rendered
+
+
 def test_render_figures_promotes_title_to_caption_when_missing(tmp_path: Path) -> None:
     renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
     c = _cell({})
