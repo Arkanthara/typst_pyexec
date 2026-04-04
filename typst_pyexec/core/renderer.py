@@ -273,6 +273,7 @@ class Renderer:
         label = cell.metadata.get("label", "")
         img_args = _passthrough_args(cell, "img-")
         fig_args = _passthrough_args(cell, "fig-")
+        subfig_args = _passthrough_args(cell, "subfig-")
         grid_args = _passthrough_args(cell, "grid-", skip_keys={"columns"})
 
         if len(rel_paths) == 1:
@@ -293,14 +294,12 @@ class Renderer:
             child_label = _child_label(label, idx)
             child_label_markup = f" <{child_label}>" if child_label else ""
             child_caption = _latex_to_typst_text(str(m.get("title", "")).strip())
-            child_caption_arg = (
-                f", caption: [{_typst_multiline(child_caption)}]"
-                if child_caption
-                else ""
-            )
-            child_items.append(
-                f'[#figure({_image_call(rel, img_args)}, kind: "subfigure"{child_caption_arg}){child_label_markup}]'
-            )
+            child_named = ['kind: "subfigure"']
+            if child_caption:
+                child_named.append(f"caption: [{_typst_multiline(child_caption)}]")
+            child_named.extend(subfig_args)
+            child_args = ", ".join([_image_call(rel, img_args)] + child_named)
+            child_items.append(f"[#figure({child_args}){child_label_markup}]")
 
         default_cols = _infer_default_grid_columns(meta, len(rel_paths))
         columns = cell.metadata.get("grid-columns", str(default_cols))
@@ -314,16 +313,16 @@ class Renderer:
         outer_named.extend(fig_args)
         outer_args = ", ".join([grid_call] + outer_named)
         label_markup = f" <{label}>" if label else ""
-        figure_call = f"figure({outer_args}){label_markup}"
+        figure_markup = f"#figure({outer_args}){label_markup}"
 
         subfig_caption_position = _subfigure_caption_position(cell)
         if subfig_caption_position is not None:
             return _with_subfigure_caption_position(
-                figure_call,
+                figure_markup,
                 subfig_caption_position,
             )
 
-        return f"#{figure_call}\n"
+        return f"{figure_markup}\n"
 
     def _check_subfigures(
         self, cells: list[Cell], results: dict[str, CellResult]
@@ -488,12 +487,12 @@ def _subfigure_caption_position(cell: Cell) -> str | None:
     return None
 
 
-def _with_subfigure_caption_position(figure_call: str, position: str) -> str:
+def _with_subfigure_caption_position(figure_markup: str, position: str) -> str:
     return (
-        "#{\n"
-        f'  show figure.where(kind: "subfigure"): set figure.caption(position: {position})\n'
-        f"  {figure_call}\n"
-        "}\n"
+        "#[\n"
+        f'  #show figure.where(kind: "subfigure"): set figure.caption(position: {position})\n'
+        f"  {figure_markup}\n"
+        "]\n"
     )
 
 

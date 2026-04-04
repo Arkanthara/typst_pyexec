@@ -129,7 +129,7 @@ def test_render_figures_grid_columns_override(tmp_path: Path) -> None:
 
 def test_render_figures_subfigure_caption_position_top(tmp_path: Path) -> None:
     renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
-    c = _cell({"subfigure-caption-position": "top"})
+    c = _cell({"subfigure-caption-position": "top", "label": "figx"})
     fig_paths = [
         str(tmp_path / "state" / "img_1.svg"),
         str(tmp_path / "state" / "img_2.svg"),
@@ -140,10 +140,36 @@ def test_render_figures_subfigure_caption_position_top(tmp_path: Path) -> None:
     ]
 
     rendered = renderer._render_figures(fig_paths, meta, c)
+    assert rendered.startswith("#[")
     assert (
         'show figure.where(kind: "subfigure"): set figure.caption(position: top)'
         in rendered
     )
+    assert "#figure(" in rendered
+    assert "<figx>" in rendered
+    assert "<figx-a>" in rendered
+
+
+def test_render_figures_subfig_args_apply_to_children_only(tmp_path: Path) -> None:
+    renderer = Renderer(figures_dir=tmp_path / "figures", state_dir=tmp_path / "state")
+    c = _cell(
+        {
+            "fig-supplement": '"Global"',
+            "subfig-supplement": '"Local"',
+        }
+    )
+    fig_paths = [
+        str(tmp_path / "state" / "img_1.svg"),
+        str(tmp_path / "state" / "img_2.svg"),
+    ]
+    meta = [
+        {"path": fig_paths[0], "title": "A", "row": 0, "col": 0, "rows": 1, "cols": 2},
+        {"path": fig_paths[1], "title": "B", "row": 0, "col": 1, "rows": 1, "cols": 2},
+    ]
+
+    rendered = renderer._render_figures(fig_paths, meta, c)
+    assert 'supplement: "Global"' in rendered
+    assert rendered.count('supplement: "Local"') == 2
 
 
 def test_render_figures_subfigure_caption_position_invalid_ignored(
