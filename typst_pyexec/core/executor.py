@@ -429,6 +429,7 @@ def _figure_preamble(
     figures_dir: str,
     working_dir: str,
     keep_subplots: bool,
+    keep_colorbar: bool = True,
     plot_options: dict[str, object] | None = None,
 ) -> str:
     """Return minimal Python code to initialize figure tracking for this cell."""
@@ -439,7 +440,7 @@ def _figure_preamble(
     return f"""\
 os.chdir("{safe_working_dir}")
 plt.rcParams.update({plot_options_expr})
-__typst_pyexec_ctx = CellFigureContext("{safe_id}", "{safe_dir}", keep_subplots={str(keep_subplots)})
+__typst_pyexec_ctx = CellFigureContext("{safe_id}", "{safe_dir}", keep_subplots={str(keep_subplots)}, keep_colorbar={str(keep_colorbar)})
 """
 
 

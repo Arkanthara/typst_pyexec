@@ -52,7 +52,11 @@ class CellFigureContext:
     """
 
     def __init__(
-        self, cell_id: str, figures_dir: str, keep_subplots: bool = False
+        self,
+        cell_id: str,
+        figures_dir: str,
+        keep_subplots: bool = False,
+        keep_colorbar: bool = True,
     ) -> None:
         """Initialize cell figure context.
 
@@ -68,6 +72,7 @@ class CellFigureContext:
         self.cell_id = cell_id
         self.figures_dir = str(figures_dir)
         self.keep_subplots = keep_subplots
+        self.keep_colorbar = keep_colorbar
         self.figs_before = set(plt.get_fignums())
         self._shown_figs: list[int] = []
         self._shown_figs_set: set[int] = set()
@@ -256,7 +261,10 @@ def save_figures_and_metadata(context: CellFigureContext) -> None:
 
 
 def _should_split_subplots(fig, keep_subplots: bool) -> bool:
-    return (not keep_subplots) and len(fig.axes) > 1
+    if keep_subplots:
+        return False
+    data_axes = [ax for ax in fig.axes if not _is_colorbar_axis(ax)]
+    return len(data_axes) > 1
 
 
 def _get_suptitle(fig) -> str:
@@ -307,13 +315,20 @@ def _save_full_figure(
     stem = context.generate_stem(fig_num)
     promote_axis_title = len(fig.axes) == 1
     fig_title = _get_axis_title(fig.axes[0]) if promote_axis_title and fig.axes else ""
+    layout_state = _capture_layout_state(fig)
+    if not context.keep_colorbar:
+        for ax in fig.axes:
+            if _is_colorbar_axis(ax):
+                ax.set_visible(False)
 
     if promote_axis_title and fig_title:
         _clear_axis_title(fig.axes[0])
     _clear_suptitle(fig)
     fig.canvas.draw()
 
-    path = _save_transparent(fig, stem, context.figures_dir, "tight", png_dpi=150)
+    bbox = _figure_tightbbox(fig)
+    path = _save_transparent(fig, stem, context.figures_dir, bbox, png_dpi=150)
+    _restore_layout_state(layout_state)
     meta = _figure_meta(
         path,
         fig_num,
@@ -334,23 +349,26 @@ def _save_subplots(
 ) -> None:
     _clear_suptitle(fig)
 
-    for ax_i, ax in enumerate(fig.axes, start=1):
+    data_axes = [ax for ax in fig.axes if not _is_colorbar_axis(ax)]
+
+    for ax_i, ax in enumerate(data_axes, start=1):
         stem = context.generate_stem(fig_num, ax_i)
         title = _get_axis_title(ax)
+        related_axes = _related_axes_for_subplot(fig, ax, keep_colorbar=context.keep_colorbar)
 
         layout_state = _capture_layout_state(fig)
         for other_ax in fig.axes:
-            other_ax.set_visible(other_ax is ax)
+            other_ax.set_visible(other_ax in related_axes)
 
         _clear_axis_title(ax)
         fig.canvas.draw()
 
-        bbox = _subplot_bbox(ax, *fig.get_size_inches())
+        bbox = _figure_tightbbox(fig)
         path = _save_transparent(fig, stem, context.figures_dir, bbox, png_dpi=200)
 
         _restore_layout_state(layout_state)
 
-        row, col, rows, cols = _subplot_grid_position(ax, ax_i, len(fig.axes))
+        row, col, rows, cols = _subplot_grid_position(ax, ax_i, len(data_axes))
         meta = _figure_meta(
             path,
             fig_num,
@@ -379,18 +397,28 @@ def _restore_layout_state(layout_state: list[tuple]) -> None:
         ax.set_position(position)
 
 
-def _subplot_bbox(ax, fig_w: float, fig_h: float) -> mpl_transforms.Bbox:
-    pos = ax.get_position().frozen()
-    x0 = max(0.0, pos.x0 - (_PAD_LEFT_IN / fig_w))
-    x1 = min(1.0, pos.x1 + (_PAD_RIGHT_IN / fig_w))
-    y0 = max(0.0, pos.y0 - (_PAD_BOTTOM_IN / fig_h))
-    y1 = min(1.0, pos.y1 + (_PAD_TOP_IN / fig_h))
-    return mpl_transforms.Bbox.from_extents(
-        x0 * fig_w,
-        y0 * fig_h,
-        x1 * fig_w,
-        y1 * fig_h,
-    )
+def _is_colorbar_axis(ax) -> bool:
+    return getattr(ax, "_colorbar", None) is not None or ax.get_label() == "<colorbar>"
+
+
+def _related_axes_for_subplot(fig, ax, keep_colorbar: bool = True) -> list:
+    related = [ax]
+    if not keep_colorbar:
+        return related
+    for other_ax in fig.axes:
+        if not _is_colorbar_axis(other_ax):
+            continue
+        colorbar = getattr(other_ax, "_colorbar", None)
+        mappable = getattr(colorbar, "mappable", None)
+        if mappable is not None and getattr(mappable, "axes", None) is ax:
+            related.append(other_ax)
+    return related
+
+
+def _figure_tightbbox(fig) -> mpl_transforms.Bbox:
+    renderer = fig.canvas.get_renderer()
+    bbox = fig.get_tightbbox(renderer)
+    return bbox.expanded(1.02, 1.02)
 
 
 def _subplot_grid_position(ax, ax_i: int, n_axes: int) -> tuple[int, int, int, int]:

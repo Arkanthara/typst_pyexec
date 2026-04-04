@@ -612,7 +612,16 @@ def _export_mode_source(cell: Cell, figures_dir: Path, working_dir: Path | None)
         str(figures_dir),
         str(cwd),
         keep_subplots=cell_option_bool(cell, "keep-subplots", False),
+        keep_colorbar=_colorbar_option(cell),
         plot_options=_effective_plot_options(cell),
     ).rstrip("\n")
     postamble = _figure_postamble().rstrip("\n")
     return f"{preamble}\n{cell.source.rstrip()}\n{postamble}\n"
+
+
+def _colorbar_option(cell: Cell) -> bool:
+    if "keep-colorbar" in cell.metadata:
+        return cell_option_bool(cell, "keep-colorbar", True)
+    if "keep-colorbars" in cell.metadata:
+        return cell_option_bool(cell, "keep-colorbars", True)
+    return True
