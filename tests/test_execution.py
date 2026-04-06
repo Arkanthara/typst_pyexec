@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from typst_pyexec.builder import Builder
 from typst_pyexec.core.cache import CacheStore
 from typst_pyexec.core.dag import DependencyGraph
 from typst_pyexec.core.executor import Executor
@@ -120,6 +121,28 @@ def test_cache_hit_skips_execution(executor, kernel_state_dir):
     # Second run — cache should be hit (pass empty cells_to_run)
     results2 = executor.run(cells, groups, set())
     assert results2["cached_cell"].from_cache
+
+
+@pytest.mark.skipif(SKIP, reason="Kernel tests disabled")
+def test_changed_cell_reruns_in_warm_session(executor):
+    """A changed cell must execute even if it already ran in this kernel session."""
+    cells_v1 = [_make_cell("warm_rerun_cell", "print('version1')")]
+    dag_v1 = DependencyGraph()
+    dag_v1.build(cells_v1)
+    groups_v1 = Scheduler().schedule(dag_v1)
+
+    first = executor.run(cells_v1, groups_v1, {"warm_rerun_cell"}, dag=dag_v1)
+    assert "version1" in first["warm_rerun_cell"].stdout
+
+    cells_v2 = [_make_cell("warm_rerun_cell", "print('version2')")]
+    dag_v2 = DependencyGraph()
+    dag_v2.build(cells_v2)
+    groups_v2 = Scheduler().schedule(dag_v2)
+
+    second = executor.run(cells_v2, groups_v2, {"warm_rerun_cell"}, dag=dag_v2)
+    assert second["warm_rerun_cell"].status == "ok"
+    assert "version2" in second["warm_rerun_cell"].stdout
+    assert not second["warm_rerun_cell"].from_cache
 
 
 @pytest.mark.skipif(SKIP, reason="Kernel tests disabled")
@@ -240,3 +263,54 @@ def test_dependent_cell_hydrates_predecessors_after_kernel_reset(tmp_path):
         assert not second["c1"].from_cache
     finally:
         kernel.shutdown()
+
+
+@pytest.mark.skipif(SKIP, reason="Kernel tests disabled")
+def test_builder_rebuild_keeps_warm_namespace_without_replaying_prerequisites(tmp_path):
+    """A warm watch-session rebuild should not re-run unchanged prerequisites."""
+    source = tmp_path / "doc.typ"
+
+    v1 = """```python
+if "session_counter" not in globals():
+    session_counter = 0
+session_counter += 1
+print(f"counter={session_counter}")
+```
+
+```python
+print(f"value={session_counter}")
+```
+"""
+    v2 = """```python
+if "session_counter" not in globals():
+    session_counter = 0
+session_counter += 1
+print(f"counter={session_counter}")
+```
+
+```python
+# touch second cell hash
+print(f"value={session_counter}")
+```
+"""
+
+    source.write_text(v1, encoding="utf-8")
+    builder = Builder(source=source, output_dir=tmp_path, compiler="typst")
+
+    try:
+        builder.build(compile_document=False)
+
+        source.write_text(v2, encoding="utf-8")
+        builder.build(compile_document=False)
+
+        c1_hash = builder._cache.latest_hash("cell_1")
+        c2_hash = builder._cache.latest_hash("cell_2")
+        c1_entry = builder._cache.load_by_hash(c1_hash) if c1_hash else None
+        c2_entry = builder._cache.load_by_hash(c2_hash) if c2_hash else None
+
+        assert c1_entry is not None
+        assert c2_entry is not None
+        assert "counter=1" in c1_entry.get("stdout", "")
+        assert "value=1" in c2_entry.get("stdout", "")
+    finally:
+        builder._kernel.shutdown()

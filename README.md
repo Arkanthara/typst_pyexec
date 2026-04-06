@@ -15,6 +15,7 @@ It executes Python fences inside `.typ` files, captures outputs (stdout, figures
 - Reactive dependency graph based on Python AST analysis
 - Incremental execution with source-hash cache
 - Persistent Jupyter kernel between builds with cold-kernel hydration
+- Warm-session prerequisite reuse to avoid unnecessary replay in watch rebuilds
 - Matplotlib figure export to SVG with PNG fallback
 - Subfigure reconstruction via `figure(grid(...))`
 - DataFrame HTML rendering to Typst `#table(...)`
@@ -30,6 +31,44 @@ For development:
 
 ```bash
 uv sync --extra dev
+```
+
+## Use As A Git Submodule (Existing Project venv)
+
+If `typst_pyexec` is checked out as a submodule and you want to run it with an
+existing project environment (for example a `code/` project that pins
+`numpy==1.26.4`), you can execute it without creating a separate venv inside
+`report/typst_pyexec`.
+
+From repository root:
+
+```bash
+uv --project code run --with-editable report/typst_pyexec typst_pyexec build report/report.typ --typst-compile-arg --root --typst-compile-arg .
+```
+
+On Windows, this repository also provides a wrapper script:
+
+```powershell
+.\report\run_typst_pyexec.ps1 build
+```
+
+This wrapper:
+
+- runs in the `code/` uv project environment
+- installs `report/typst_pyexec` as editable for that run
+- forwards Typst `--root` to the repository root
+- avoids any `cd` requirement
+
+You can also run watch mode the same way:
+
+```powershell
+.\report\run_typst_pyexec.ps1 watch -PreviewEngine typst
+```
+
+If you run from source manually, `python -m typst_pyexec` is supported:
+
+```bash
+PYTHONPATH=report/typst_pyexec python -m typst_pyexec build report/report.typ
 ```
 
 ## CLI Usage
@@ -69,6 +108,10 @@ Common options:
 - `--typst-watch-arg <arg>`: pass an argument only to Typst `watch` (repeatable)
 - `watch --preview-engine <auto|tinymist|typst|none>`: select live preview backend
 
+Environment variables:
+
+- `TYPST_PYEXEC_CELL_TIMEOUT=<seconds>`: timeout per executed Python cell (default: `600`). Use a larger value for long-running analysis cells in `watch` mode.
+
 ### Watch mode behavior
 
 - Watch mode regenerates `*.typst_pyexec.typ` on each save and delegates rendering to a live preview process.
@@ -77,6 +120,7 @@ Common options:
 - `--preview-engine typst` always runs `typst watch`.
 - `--preview-engine none` disables live preview and only refreshes the intermediate file.
 - Any `--typst-watch-arg` values are applied to `typst watch` (including fallback from `tinymist` to `typst watch`).
+- Any `--typst-compile-arg` values are also passed to `tinymist preview` (for example `--root`) to keep preview file access and project root behavior consistent with build mode.
 
 Examples:
 
@@ -200,6 +244,7 @@ Behavior notes:
 - Cache entries are stored under `.typst_pyexec/cache`.
 - `--no-cache` disables cache reads and writes and forces all executable cells to run.
 - `refresh: true` forces a cell to execute every build but does not cascade to dependents.
+- In watch mode, typst_pyexec keeps one executor for the whole watcher process. If prerequisite cells already ran in that warm kernel session, they are not replayed during later dependent executions.
 - When a kernel is cold or reconnected, typst_pyexec replays prerequisite cells to rebuild namespace state.
 
 ## Local State

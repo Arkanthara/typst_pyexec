@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 class Builder:
     """Orchestrates the full build pipeline for a single Typst document.
 
+    A single :class:`~typst_pyexec.core.executor.Executor` instance is reused
+    for the lifetime of this builder so watch-mode rebuilds can keep
+    session-local execution state.
+
     Parameters
     ----------
     source:
@@ -75,6 +79,13 @@ class Builder:
         self._cache = CacheStore(self._state_dir / "cache")
         self._kernel = KernelManager(self._state_dir)
         self._renderer = Renderer(self._figures_dir, self._state_dir)
+        self._executor = Executor(
+            kernel=self._kernel,
+            cache=self._cache if self.use_cache else None,
+            figures_dir=self._figures_dir,
+            working_dir=self.source.parent,
+            n_jobs=self.n_jobs,
+        )
 
         self._parser = Parser()
         self._dag = DependencyGraph()
@@ -103,14 +114,6 @@ class Builder:
             self._dag.build(cells)
             groups = self._scheduler.schedule(self._dag)
             cell_hashes = self._compute_cell_hashes(cells) if self.use_cache else None
-
-            executor = Executor(
-                kernel=self._kernel,
-                cache=self._cache if self.use_cache else None,
-                figures_dir=self._figures_dir,
-                working_dir=self.source.parent,
-                n_jobs=self.n_jobs,
-            )
 
             executable_ids = {
                 c.cell_id for c in cells if parse_bool(c.metadata.get("execute"), True)
@@ -153,7 +156,7 @@ class Builder:
                     "If you expected re-execution, ensure the code content changed or set %%| refresh: true on that cell."
                 )
 
-            results = executor.run(
+            results = self._executor.run(
                 cells,
                 groups,
                 cells_to_run,
@@ -327,7 +330,12 @@ class Builder:
             return None
 
         if preview_engine in {"auto", "tinymist"} and shutil.which("tinymist"):
-            return ["tinymist", "preview", str(self._intermediate)]
+            return [
+                "tinymist",
+                "preview",
+                str(self._intermediate),
+                *self.typst_compile_args,
+            ]
 
         if preview_engine == "tinymist":
             logger.warning(

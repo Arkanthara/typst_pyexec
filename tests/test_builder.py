@@ -150,7 +150,11 @@ def test_resolve_preview_command_prefers_tinymist_when_available(
 ) -> None:
     source = tmp_path / "doc.typ"
     source.write_text("= t\n", encoding="utf-8")
-    builder = Builder(source=source, output_dir=tmp_path)
+    builder = Builder(
+        source=source,
+        output_dir=tmp_path,
+        typst_compile_args=["--root", str(tmp_path)],
+    )
 
     monkeypatch.setattr(
         "typst_pyexec.builder.shutil.which",
@@ -158,7 +162,41 @@ def test_resolve_preview_command_prefers_tinymist_when_available(
     )
 
     cmd = builder._resolve_preview_command("auto")
-    assert cmd == ["tinymist", "preview", str(builder._intermediate)]
+    assert cmd == [
+        "tinymist",
+        "preview",
+        str(builder._intermediate),
+        "--root",
+        str(tmp_path),
+    ]
+
+
+def test_resolve_preview_command_tinymist_includes_compile_args(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "doc.typ"
+    source.write_text("= t\n", encoding="utf-8")
+    builder = Builder(
+        source=source,
+        output_dir=tmp_path,
+        typst_compile_args=["--root", str(tmp_path), "--input", "k=v"],
+    )
+
+    monkeypatch.setattr(
+        "typst_pyexec.builder.shutil.which",
+        lambda name: "tm" if name == "tinymist" else None,
+    )
+
+    cmd = builder._resolve_preview_command("tinymist")
+    assert cmd == [
+        "tinymist",
+        "preview",
+        str(builder._intermediate),
+        "--root",
+        str(tmp_path),
+        "--input",
+        "k=v",
+    ]
 
 
 def test_resolve_preview_command_falls_back_to_typst_watch_when_tinymist_missing(

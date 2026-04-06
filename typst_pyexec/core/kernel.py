@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from queue import Empty
@@ -14,7 +15,35 @@ import jupyter_client
 logger = logging.getLogger(__name__)
 
 _CONNECTION_FILE = "kernel_connection.json"
-_TIMEOUT = 30  # seconds to wait for kernel responses
+
+
+def _default_timeout_seconds() -> float:
+    """Return default execution timeout, overridable via env var.
+
+    ``TYPST_PYEXEC_CELL_TIMEOUT`` accepts a positive number of seconds.
+    Invalid values fall back to 600 seconds.
+    """
+    raw = os.environ.get("TYPST_PYEXEC_CELL_TIMEOUT", "").strip()
+    if not raw:
+        return 600.0
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid TYPST_PYEXEC_CELL_TIMEOUT=%r; using default 600s.",
+            raw,
+        )
+        return 600.0
+    if value <= 0:
+        logger.warning(
+            "Non-positive TYPST_PYEXEC_CELL_TIMEOUT=%r; using default 600s.",
+            raw,
+        )
+        return 600.0
+    return value
+
+
+_TIMEOUT = _default_timeout_seconds()
 
 
 class KernelManager:
@@ -147,6 +176,9 @@ class KernelManager:
             if remaining <= 0:
                 result["error"] = "Execution timed out."
                 result["status"] = "error"
+                # The kernel may still be running user code after timeout;
+                # restart so the next cell starts from a known-good state.
+                self.restart()
                 break
             try:
                 msg = self._kc.get_iopub_msg(timeout=min(remaining, 1.0))

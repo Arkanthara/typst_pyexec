@@ -151,6 +151,8 @@ class Executor:
         self._n_jobs = n_jobs
         self._runtime_initialized = False
         # Tracks cells whose code has been executed in the current kernel session.
+        # Builder reuses this Executor across watch rebuilds, so this set can
+        # suppress unnecessary prerequisite replay in warm sessions.
         # Cache hits alone do not populate Python namespace state.
         self._executed_cells: set[str] = set()
 
@@ -287,12 +289,52 @@ class Executor:
             # Because Jupyter kernels are not thread-safe we run sequentially.
             # Independent groups are still useful for future multi-kernel support.
             for cid in to_execute:
-                cell = cell_map[cid]
-                result = self._execute_one(cell)
-                results[cid] = result
-                self._executed_cells.add(cid)
-                if self._cache:
-                    self._cache.save(cid, cell.source, result.to_dict())
+                # If the kernel was restarted mid-build, replay prerequisites
+                # needed for this cell into the fresh namespace.
+                planned_ids = [cid]
+                if dag is not None:
+                    required_ids = dag.required_with_predecessors({cid})
+                    missing_prereqs = sorted(
+                        (
+                            rid
+                            for rid in required_ids
+                            if rid != cid
+                            and execute_enabled.get(rid, True)
+                            and rid not in self._executed_cells
+                        ),
+                        key=lambda rid: cell_map[rid].index,
+                    )
+                    # Always execute the target cell when it is scheduled.
+                    # Only missing prerequisites are replayed.
+                    planned_ids = [*missing_prereqs, cid]
+
+                for run_id in planned_ids:
+                    # Avoid re-running a prerequisite already executed earlier
+                    # in this pass (or already materialized in results).
+                    if run_id in results and run_id in self._executed_cells:
+                        continue
+
+                    run_cell = cell_map[run_id]
+                    result = self._execute_one(run_cell)
+                    results[run_id] = result
+                    if result.status == "ok":
+                        self._executed_cells.add(run_id)
+                    if self._cache:
+                        self._cache.save(run_id, run_cell.source, result.to_dict())
+
+                    # If a prerequisite failed, skip dependent execution with
+                    # an explicit message for easier debugging.
+                    if result.status == "error" and run_id != cid:
+                        results[cid] = CellResult(
+                            cell_id=cid,
+                            error=(
+                                f"Skipped because prerequisite cell {run_id} failed.\n"
+                                f"{result.error or ''}".rstrip()
+                            ),
+                            status="error",
+                            from_cache=False,
+                        )
+                        break
 
         return results
 
@@ -371,8 +413,12 @@ class Executor:
         raw_main = self._execute_with_recovery(main_code, cell.cell_id)
         # Execute postamble separately so the user's final expression still
         # produces execute_result / display_data in the main execution.
-        raw_post = self._execute_with_recovery(_figure_postamble(), cell.cell_id)
-        raw = _merge_kernel_results(raw_main, raw_post)
+        # If main execution failed, skip postamble to avoid cascading errors.
+        if raw_main.get("status") == "error":
+            raw = raw_main
+        else:
+            raw_post = self._execute_with_recovery(_figure_postamble(), cell.cell_id)
+            raw = _merge_kernel_results(raw_main, raw_post)
 
         if raw.get("status") == "error":
             logger.error(
@@ -432,12 +478,20 @@ def _figure_preamble(
     keep_colorbar: bool = True,
     plot_options: dict[str, object] | None = None,
 ) -> str:
-    """Return minimal Python code to initialize figure tracking for this cell."""
+    """Return Python code that initializes figure tracking for this cell.
+
+    The preamble is intentionally self-contained because a kernel can be
+    restarted between cells in watch mode.
+    """
     safe_dir = figures_dir.replace("\\", "\\\\")
     safe_working_dir = working_dir.replace("\\", "\\\\")
     safe_id = cell_id.replace('"', '\\"')
     plot_options_expr = repr(plot_options or {})
     return f"""\
+import os
+import matplotlib.pyplot as plt
+from typst_pyexec.runtime.figure_export import CellFigureContext, save_figures_and_metadata, setup_figure_tracking
+setup_figure_tracking()
 os.chdir("{safe_working_dir}")
 plt.rcParams.update({plot_options_expr})
 __typst_pyexec_ctx = CellFigureContext("{safe_id}", "{safe_dir}", keep_subplots={str(keep_subplots)}, keep_colorbar={str(keep_colorbar)})

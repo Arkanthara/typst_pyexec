@@ -52,6 +52,21 @@ def test_figure_preamble_includes_rcparams_update() -> None:
     assert "'axes.grid': True" in preamble
 
 
+def test_figure_preamble_is_self_contained() -> None:
+    preamble = _figure_preamble(
+        "c1",
+        "C:/tmp/figures",
+        "C:/tmp",
+        keep_subplots=True,
+        plot_options={},
+    )
+    assert "import os" in preamble
+    assert "import matplotlib.pyplot as plt" in preamble
+    assert "from typst_pyexec.runtime.figure_export import" in preamble
+    assert "setup_figure_tracking()" in preamble
+    assert 'os.chdir("C:/tmp")' in preamble
+
+
 def test_effective_plot_options_defaults_are_applied() -> None:
     cell = _cell({})
     assert _effective_plot_options(cell) == {
