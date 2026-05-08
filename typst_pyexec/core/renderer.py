@@ -260,7 +260,9 @@ class Renderer:
         meta = _normalize_figure_metadata(figure_metadata)
         rel_paths = [
             _relative_figure_path(
-                _resolve_exported_figure_path(Path(p)),
+                _resolve_exported_figure_path(
+                    _localize_figure_path(p, self._state_dir)
+                ),
                 self._state_dir.parent,
             )
             for p in fig_paths
@@ -436,10 +438,12 @@ def _order_paths_with_meta(
 ) -> list[tuple[str, dict]]:
     if not meta:
         return [(p, {}) for p in rel_paths]
-    by_name = {Path(str(m.get("path", ""))).name: m for m in meta}
+    by_name = {
+        Path(_normalize_path_string(str(m.get("path", "")))).name: m for m in meta
+    }
     by_stem: dict[str, dict] = {}
     for m in meta:
-        stem = Path(str(m.get("path", ""))).stem
+        stem = Path(_normalize_path_string(str(m.get("path", "")))).stem
         if not stem or stem in by_stem:
             continue
         by_stem[stem] = m
@@ -513,9 +517,35 @@ def _relative_figure_path(fig_path: Path, doc_dir: Path) -> str:
     """Return a path string relative to *doc_dir*, using forward slashes."""
     try:
         rel = fig_path.relative_to(doc_dir)
-        return rel.as_posix()
+        return _normalize_path_string(rel.as_posix())
     except ValueError:
-        return fig_path.as_posix()
+        return _normalize_path_string(fig_path.as_posix())
+
+
+def _localize_figure_path(fig_path: str, state_dir: Path) -> Path:
+    """Map cached figure paths from other OSes into the local state dir."""
+    raw = str(fig_path).strip()
+    if not raw:
+        return Path(raw)
+
+    normalized = _normalize_path_string(raw)
+    marker = f"/{state_dir.name}/figures/"
+    idx = normalized.rfind(marker)
+    if idx != -1:
+        rel = normalized[idx + 1 :]
+        return state_dir.parent / rel
+
+    direct = f"{state_dir.name}/figures/"
+    if normalized.startswith(direct):
+        return state_dir.parent / normalized
+    if normalized.startswith(f"./{direct}"):
+        return state_dir.parent / normalized[2:]
+
+    return Path(raw)
+
+
+def _normalize_path_string(value: str) -> str:
+    return value.replace("\\", "/")
 
 
 def _resolve_exported_figure_path(fig_path: Path) -> Path:

@@ -158,6 +158,8 @@ def test_matplotlib_figure_saved(executor, kernel_state_dir):
     r = results["fig_cell"]
     assert len(r.figures) >= 1
     p = Path(r.figures[0])
+    if not p.is_absolute():
+        p = kernel_state_dir.parent / p
     assert p.exists()
     assert p.suffix in (".svg", ".png")
 

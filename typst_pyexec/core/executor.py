@@ -437,6 +437,12 @@ class Executor:
         )
         figures.extend(inline_figures)
 
+        figures, figure_metadata = _normalize_figure_results(
+            figures,
+            figure_metadata,
+            self._figures_dir,
+        )
+
         return CellResult(
             cell_id=cell.cell_id,
             stdout=clean_stdout,
@@ -543,6 +549,66 @@ def _parse_stdout_payload(stdout: str) -> tuple[str, list[str], list[dict]]:
         clean_lines.append(line)
 
     return "\n".join(clean_lines), figures, metadata
+
+
+def _normalize_figure_results(
+    figures: list[str],
+    figure_metadata: list[dict],
+    figures_dir: Path,
+) -> tuple[list[str], list[dict]]:
+    state_dir = figures_dir.parent
+    output_dir = state_dir.parent
+    state_dir_name = state_dir.name
+
+    normalized_figures = [
+        _normalize_figure_path(p, output_dir, state_dir_name) for p in figures
+    ]
+
+    normalized_meta: list[dict] = []
+    for meta in figure_metadata:
+        if not isinstance(meta, dict):
+            continue
+        updated = dict(meta)
+        path = updated.get("path")
+        if isinstance(path, str) and path:
+            updated["path"] = _normalize_figure_path(
+                path,
+                output_dir,
+                state_dir_name,
+            )
+        normalized_meta.append(updated)
+
+    return normalized_figures, normalized_meta
+
+
+def _normalize_figure_path(path: str, output_dir: Path, state_dir_name: str) -> str:
+    raw = str(path).strip()
+    if not raw:
+        return raw
+
+    normalized = raw.replace("\\", "/")
+    marker = f"/{state_dir_name}/figures/"
+    idx = normalized.rfind(marker)
+    if idx != -1:
+        return normalized[idx + 1 :]
+
+    direct = f"{state_dir_name}/figures/"
+    if normalized.startswith(direct):
+        return normalized
+    if normalized.startswith(f"./{direct}"):
+        return normalized[2:]
+
+    try:
+        candidate = Path(normalized)
+        if candidate.is_absolute():
+            try:
+                return candidate.relative_to(output_dir).as_posix()
+            except ValueError:
+                pass
+    except Exception:
+        pass
+
+    return normalized
 
 
 def _extract_inline_images(
