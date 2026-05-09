@@ -14,7 +14,7 @@ from typst_pyexec.core.kernel import KernelManager
 from typst_pyexec.core.parser import Cell
 from typst_pyexec.core.scheduler import ExecutionGroup
 from typst_pyexec.utils.hashing import sha256_text
-from typst_pyexec.utils.options import cell_option_bool
+from typst_pyexec.utils.options import cell_option_bool, parse_float
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +395,7 @@ class Executor:
         """Execute *cell* in the kernel and return a :class:`CellResult`."""
         logger.info("Executing cell %s…", cell.cell_id)
         effective_plot_options = _effective_plot_options(cell)
+        timeout = _cell_timeout_seconds(cell)
         logger.info(
             "Cell %s effective plot rcParams: %s",
             cell.cell_id,
@@ -410,14 +411,16 @@ class Executor:
             plot_options=effective_plot_options,
         )
         main_code = preamble + "\n" + cell.source
-        raw_main = self._execute_with_recovery(main_code, cell.cell_id)
+        raw_main = self._execute_with_recovery(main_code, cell.cell_id, timeout)
         # Execute postamble separately so the user's final expression still
         # produces execute_result / display_data in the main execution.
         # If main execution failed, skip postamble to avoid cascading errors.
         if raw_main.get("status") == "error":
             raw = raw_main
         else:
-            raw_post = self._execute_with_recovery(_figure_postamble(), cell.cell_id)
+            raw_post = self._execute_with_recovery(
+                _figure_postamble(), cell.cell_id, timeout
+            )
             raw = _merge_kernel_results(raw_main, raw_post)
 
         if raw.get("status") == "error":
@@ -455,10 +458,14 @@ class Executor:
             from_cache=False,
         )
 
-    def _execute_with_recovery(self, code: str, cell_id: str) -> dict:
+    def _execute_with_recovery(
+        self, code: str, cell_id: str, timeout: float | None = None
+    ) -> dict:
         """Execute kernel code, restarting once on transport-level failure."""
         try:
-            return self._kernel.execute(code)
+            if timeout is None:
+                return self._kernel.execute(code)
+            return self._kernel.execute(code, timeout=timeout)
         except Exception as exc:
             logger.error(
                 "Kernel error on cell %s: %s — attempting recovery.", cell_id, exc
@@ -468,7 +475,9 @@ class Executor:
             self._executed_cells.clear()
             self._kernel.initialize_runtime()
             self._runtime_initialized = True
-            return self._kernel.execute(code)
+            if timeout is None:
+                return self._kernel.execute(code)
+            return self._kernel.execute(code, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +683,17 @@ def _parse_plot_option_value(value: str) -> object:
         return ast.literal_eval(raw)
     except (ValueError, SyntaxError):
         return raw
+
+
+def _cell_timeout_seconds(cell: Cell) -> float | None:
+    """Return per-cell timeout override in seconds, if provided."""
+    raw = cell.metadata.get("timeout") or cell.metadata.get("cell-timeout")
+    if raw is None:
+        return None
+    value = parse_float(raw, -1.0)
+    if value <= 0:
+        return None
+    return value
 
 
 def _merge_kernel_results(primary: dict, secondary: dict) -> dict:

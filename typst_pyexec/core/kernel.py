@@ -174,7 +174,7 @@ class KernelManager:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                result["error"] = "Execution timed out."
+                result["error"] = f"Execution timed out after {timeout:g}s."
                 result["status"] = "error"
                 # The kernel may still be running user code after timeout;
                 # restart so the next cell starts from a known-good state.

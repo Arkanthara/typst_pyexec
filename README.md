@@ -148,6 +148,7 @@ Supported options:
 
 - `execute` (default `true`): skip execution when `false`
 - `refresh` (default `false`): force this cell to run every build
+- `timeout`: per-cell execution timeout in seconds (overrides `TYPST_PYEXEC_CELL_TIMEOUT` when set)
 - `echo` (default `true`): show or hide source code
 - `raw` (default `true`): show or hide textual runtime output (stdout, tracebacks, `text/plain` bundles)
 - `figure` (default `true`): show or hide rendered figures
